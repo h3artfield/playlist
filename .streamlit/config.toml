@@ -1,0 +1,6 @@
+# Streamlit (local + Community Cloud)
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false

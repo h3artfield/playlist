@@ -1,0 +1,122 @@
+# Paths use forward slashes; adjust if your Nikki or grids files move.
+gracenote_binge_id: 45397
+nikki_workbook: "C:/Users/h3art/Downloads/2024 Nikki Spreadsheets.xlsx"
+timezone_note: local
+# Long multi-week grids often need more episodes than exist in Nikki; wrapping repeats from episode 1.
+wrap_episodes: true
+
+shows:
+  jim_bowie:
+    display_name: "The Adventures of Jim Bowie"
+    kind: series
+    nikki_sheet: "2025 JIM BOWIE"
+    prefix: AJB
+    start_episode_index: 60
+  texan:
+    display_name: "The Texan"
+    kind: series
+    nikki_sheet: "The Texan - Note - missing epis"
+    prefix: TEX
+  hunter:
+    display_name: "Hunter"
+    kind: series
+    nikki_sheet: "Hunter"
+    prefix: HUN
+  renegade:
+    display_name: "Renegade"
+    kind: series
+    nikki_sheet: "Renegade"
+    prefix: REN
+  carol_burnett:
+    display_name: "The Carol Burnett Show"
+    kind: series
+    nikki_sheet: "Carol Burnett - NOTE - EPISODE "
+    prefix: CBS
+  mst3k:
+    display_name: "Mystery Science Theater 3000"
+    kind: series
+    nikki_sheet: "MST3K - NOTE - Each episode fol"
+    prefix: MST
+  real_mccoys:
+    display_name: "The Real McCoys"
+    kind: series
+    nikki_sheet: "Real McCoys - NOTE - Each Seaso"
+    prefix: MCC
+  jump_street:
+    display_name: "21 Jump Street"
+    kind: series
+    nikki_sheet: "21 Jump Street"
+    prefix: JMP
+  saint:
+    display_name: "The Saint"
+    kind: series
+    nikki_sheet: "The Saint - NOTE - Episode titl"
+    prefix: SNT
+  laugh_in:
+    display_name: "Rowan & Martin's Laugh-In"
+    kind: series
+    nikki_sheet: "Laugh-In - NOTE - CC Files are "
+    prefix: RML
+  lucy:
+    display_name: "The Lucy Show"
+    kind: series
+    nikki_sheet: "Lucy Show"
+    prefix: LUC
+    nikki_style: generic
+  tim_conway:
+    display_name: "The Tim Conway Comedy Hour"
+    kind: series
+    nikki_sheet: "Tim Conway Comedy Hour - Note -"
+    prefix: TCC
+    nikki_style: leading_episode
+
+  paid_programming:
+    display_name: "Paid Programming"
+    kind: literal
+  perry_stone:
+    display_name: "Perry Stone"
+    kind: literal
+  sacred_name:
+    display_name: "Sacred Name"
+    kind: literal
+  les_feldick:
+    display_name: "Les Feldick Ministries"
+    kind: literal
+  healthy_christian:
+    display_name: "The Healthy Christian with Rich Stocks"
+    kind: literal
+  michael_youssef:
+    display_name: "Michael Youssef"
+    kind: literal
+  micheal_youssef:
+    display_name: "Micheal Youssef"
+    kind: literal
+  awakening:
+    display_name: "The Awakening Hour"
+    kind: literal
+  time_for_hope:
+    display_name: "Time for Hope"
+    kind: literal
+  rejoyce:
+    display_name: "Rejoyce in Jesus"
+    kind: literal
+  postcard_travel:
+    display_name: "Post Card Travel TV"
+    kind: literal
+  jet_set:
+    display_name: "The Jet Set"
+    kind: literal
+
+weeks:
+  - monday: "2026-04-06"
+    grids_file: "C:/Users/h3art/Downloads/APRIL 2026 BINGE GRIDS.xlsx"
+    sheet_name: "4-6-2026"
+  - monday: "2026-04-13"
+    grids_file: "C:/Users/h3art/Downloads/APRIL 2026 BINGE GRIDS.xlsx"
+    sheet_name: "4-13-2026"
+  - monday: "2026-04-20"
+    grids_file: "C:/Users/h3art/Downloads/APRIL 2026 BINGE GRIDS.xlsx"
+    sheet_name: "4-20-2026"
+  - monday: "2026-04-27"
+    grids_file: "C:/Users/h3art/Downloads/APRIL 2026 BINGE GRIDS.xlsx"
+    sheet_name: "4-27-2026"
