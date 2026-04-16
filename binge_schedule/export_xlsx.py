@@ -603,12 +603,7 @@ def export_both(
     seed_messages.extend(sync_straddle_weeks_to_canonical_grids_file(week_list))
     cat = build_catalog(cfg)
     apply_saved_cursors(cat, resolved_cursor_state_path(cfg))
-    episode_actions, reference_binge_warning, reference_merge_notes = load_reference_episode_actions(
-        cfg
-    )
-    if reference_binge_warning:
-        seed_messages.append(reference_binge_warning)
-    seed_messages.extend(reference_merge_notes)
+    episode_actions, _, _ = load_reference_episode_actions(cfg)
     binge_sheets: dict[str, pd.DataFrame] = {}
     week_by_label: dict[str, WeekDef] = {}
     grid_raw_by_label: dict[str, list[list[Optional[str]]]] = {}
@@ -620,18 +615,11 @@ def export_both(
         if wk.monday in sync_mondays:
             wdf = load_reference_week_dataframe(cfg, mon)
             if wdf is not None:
-                seed_messages.extend(
-                    sync_cursors_from_reference_binge_week(
-                        cfg,
-                        cat,
-                        wdf,
-                        monday_label=wk.monday,
-                    )
-                )
-            else:
-                seed_messages.append(
-                    f"reference_binge_sync_cursor_weeks: no reference rows for week starting {wk.monday} in "
-                    f"{cfg.reference_binge_file!r}"
+                sync_cursors_from_reference_binge_week(
+                    cfg,
+                    cat,
+                    wdf,
+                    monday_label=wk.monday,
                 )
 
         grid_raw = load_grid_sheet(wk.grids_file, wk.sheet_name)
@@ -641,9 +629,8 @@ def export_both(
             cfg, cat, grid_raw, wk.monday, episode_actions=episode_actions
         )
         binge_sheets[label] = normalize_binge_df_columns(binge_rows_to_dataframe(rows))
-        merged_df, literal_notes = merge_literal_reference_binge_days(cfg, mon, binge_sheets[label])
+        merged_df, _literal_notes = merge_literal_reference_binge_days(cfg, mon, binge_sheets[label])
         binge_sheets[label] = merged_df
-        seed_messages.extend(literal_notes)
         reconcile_catalog_from_binge_dataframe(cfg, cat, binge_sheets[label])
         week_by_label[label] = wk
 

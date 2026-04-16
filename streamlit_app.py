@@ -770,8 +770,11 @@ def _render_build_playlist(cfg, cfg_path: Path, nikki: Path) -> None:
                 for s in seeded:
                     if s.startswith("Copied"):
                         st.success(s)
-                    else:
-                        st.info(s)
+                    elif any(
+                        x in s.lower()
+                        for x in ("could not", "cannot load", "missing", "skipping", "no program", "no ``weeks")
+                    ):
+                        st.warning(s)
                 for w in ovw:
                     st.warning(w)
 

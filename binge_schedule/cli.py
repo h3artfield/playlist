@@ -47,7 +47,11 @@ def build(
     typer.echo(f"Wrote {binge}")
     typer.echo(f"Wrote {grids}")
     for s in seeded:
-        typer.echo(s)
+        if s.startswith("Copied") or any(
+            x in s.lower()
+            for x in ("could not", "cannot load", "missing", "skipping", "no program", "no ``weeks")
+        ):
+            typer.echo(s)
     for w in warnings:
         typer.echo(f"Warning: {w}", err=True)
 
