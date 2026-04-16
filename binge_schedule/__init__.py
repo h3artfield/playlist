@@ -1,3 +1,3 @@
-"""Build BINGE schedule workbooks from Nikki spreadsheets and weekly grids."""
+"""Build BINGE schedule workbooks from the content workbook and weekly grids."""
 
 __version__ = "0.1.0"

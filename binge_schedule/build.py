@@ -10,7 +10,9 @@ from binge_schedule.grid import (
     segments_for_day,
     slot_clock_to_time,
 )
-from binge_schedule.models import BingeRow, BuildConfig, Catalog, ShowDef
+from binge_schedule.binge_pattern import EpisodeActionMap
+from binge_schedule.models import BingeRow, BuildConfig, Catalog, Episode, ShowDef
+from binge_schedule.show_resolve import resolve_show
 from binge_schedule import nikki
 
 
@@ -30,35 +32,25 @@ def _literal_episode_name(cell: str) -> str:
     return s
 
 
-def resolve_show(cell: str, shows: dict[str, ShowDef]) -> tuple[str, Optional[ShowDef]]:
-    cell = cell.strip()
-    for key, sd in shows.items():
-        dn = sd.display_name.strip()
-        if cell == dn:
-            return key, sd
-    candidates: list[tuple[int, str, ShowDef]] = []
-    for key, sd in shows.items():
-        dn = sd.display_name.strip()
-        if cell.startswith(dn):
-            candidates.append((len(dn), key, sd))
-    if candidates:
-        candidates.sort(reverse=True)
-        _, key, sd = candidates[0]
-        return key, sd
-    return "literal", None
-
-
 def build_catalog(cfg: BuildConfig) -> Catalog:
+    """Load each series’ episode list from the content workbook.
+
+    Respects per-show ``nikki_row_filter`` (e.g. ``green_episode_cell`` for Carol Burnett): only those
+    rows exist in ``cat.by_show``, so scheduling never pulls a disallowed episode.
+    """
     cat = Catalog()
     for key, sd in cfg.shows.items():
         if sd.kind != "series" or not sd.nikki_sheet:
             continue
         style = sd.nikki_style or nikki.default_style_for_sheet(sd.nikki_sheet)
+        cols = nikki.effective_column_headers(sd, style=style)
         eps = nikki.load_sheet(
             cfg.nikki_workbook,
             sd.nikki_sheet,
             style=style,
             prefix=sd.prefix,
+            columns=cols,
+            row_filter=sd.nikki_row_filter,
         )
         cat.by_show[key] = eps
         cat.cursor[key] = max(0, min(sd.start_episode_index, len(eps)))
@@ -69,15 +61,67 @@ def _fmt_time(dt: datetime) -> str:
     return f"{dt.hour}:{dt.minute:02d}"
 
 
+def _episode_for_slot(
+    cfg: BuildConfig,
+    cat: Catalog,
+    key: str,
+    wd: int,
+    slot: int,
+    episode_actions: Optional[EpisodeActionMap],
+    emitted: dict[tuple[str, int, int], Episode],
+) -> Episode:
+    """Resolve Nikki episode for this clock slot using optional canonical April actions.
+
+    Lookup is ``(show_key, weekday, slot)``. Missing entry means no reference rule for this show in this
+    half-hour (e.g. different show occupied that slot in April, or programming changed)—use normal
+    **air-date** order via ``next_episode``.
+    """
+    if not episode_actions:
+        ep = cat.next_episode(key, wrap=cfg.wrap_episodes)
+        emitted[(key, wd, slot)] = ep
+        return ep
+
+    act = episode_actions.get((key, wd, slot))
+    if act is None or act == "advance":
+        ep = cat.next_episode(key, wrap=cfg.wrap_episodes)
+        emitted[(key, wd, slot)] = ep
+        return ep
+
+    assert act[0] == "repeat"
+    _, wd_r, sl_r = act
+    ref = emitted.get((key, wd_r, sl_r))
+    if ref is None:
+        ep = cat.next_episode(key, wrap=cfg.wrap_episodes)
+        emitted[(key, wd, slot)] = ep
+        return ep
+    emitted[(key, wd, slot)] = ref
+    return ref
+
+
 def rows_for_week(
     cfg: BuildConfig,
     cat: Catalog,
     grid: list[list[Optional[str]]],
     monday_s: str,
+    *,
+    episode_actions: Optional[EpisodeActionMap] = None,
 ) -> list[BingeRow]:
+    """Turn one week’s **grids** program into BINGE rows.
+
+    The grids workbook does **not** carry Nikki episode codes; it only lists *what* airs *when* (show titles,
+    literals). **Episode code, episode #, and episode name** come from the Nikki workbook in playlist order.
+
+    If ``episode_actions`` is set (from ``reference_binge_file``), each half-hour for a **given show** follows
+    that show’s April pattern: **advance** on the first time an ``EPISODE`` code appears that week for that
+    show; **repeat** replays that Nikki episode when the same code appears again. If April had a **different**
+    show in that clock slot, there is no pattern for your show there—only **playlist / air order** (``next_episode``).
+    Otherwise every half-hour advances.
+    """
     monday = parse_monday(monday_s)
     dates = day_dates(monday)
     rows: list[BingeRow] = []
+    # (show_key, weekday, slot) -> Episode emitted for that clock position (for repeat refs).
+    emitted: dict[tuple[str, int, int], Episode] = {}
     for day_index in range(7):
         d = dates[day_index]
         col = [grid[r][day_index] for r in range(48)]
@@ -153,17 +197,26 @@ def rows_for_week(
 
             if key not in cat.by_show:
                 raise KeyError(
-                    f"Show '{key}' ({sd.display_name}) is series but Nikki episodes were not loaded. "
+                    f"Show '{key}' ({sd.display_name}) is series but episodes were not loaded from the content workbook. "
                     "Check nikki_sheet and kind in config."
                 )
 
-            # series
+            # series — one Nikki episode per half-hour; advance vs repeat from optional reference BINGE actions.
             n_slots = seg.end_slot - seg.start_slot
+            wd = d.weekday()
             for k in range(n_slots):
                 slot = seg.start_slot + k
                 st_dt = combine_date_time(d, slot_clock_to_time(slot))
                 fin_dt = st_dt + timedelta(minutes=30)
-                ep = cat.next_episode(key, wrap=cfg.wrap_episodes)
+                ep = _episode_for_slot(
+                    cfg,
+                    cat,
+                    key,
+                    wd,
+                    slot,
+                    episode_actions,
+                    emitted,
+                )
                 rows.append(
                     BingeRow(
                         date=d,
@@ -175,7 +228,7 @@ def rows_for_week(
                         episode_name=ep.title,
                     )
                 )
-    rows.sort(key=lambda r: (r.date, _time_sort_key(r.start)))
+    rows.sort(key=_binge_row_sort_datetime)
     return rows
 
 
@@ -183,6 +236,15 @@ def _time_sort_key(s: str) -> tuple[int, int]:
     parts = str(s).replace(":", " ").split()
     h, m = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
     return h, m
+
+
+def _binge_row_sort_datetime(r: BingeRow) -> datetime:
+    """Stable chronological order (fixes Thu 23:30 vs Fri 0:00 when date/time types mix)."""
+    d = r.date
+    if hasattr(d, "date"):
+        d = d.date()
+    h, m = _time_sort_key(str(r.start))
+    return datetime(d.year, d.month, d.day, h, m)
 
 
 def build_grids_matrix(

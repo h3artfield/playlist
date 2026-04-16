@@ -14,15 +14,38 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from binge_schedule.binge_overrides import BingeRowOverride, apply_binge_row_overrides
-from binge_schedule.binge_to_grid import binge_dataframe_to_grid, split_binge_df_by_monday
+from binge_schedule.binge_to_grid import (
+    binge_dataframe_to_grid,
+    normalize_binge_df_columns,
+    split_binge_df_by_monday,
+)
+from binge_schedule.binge_pattern import (
+    load_reference_episode_actions,
+    load_reference_week_dataframe,
+    merge_literal_reference_binge_days,
+    reconcile_catalog_from_binge_dataframe,
+    sync_cursors_from_reference_binge_week,
+)
 from binge_schedule.build import (
     _short_program_title,
     build_catalog,
     build_grids_matrix,
     rows_for_week,
 )
-from binge_schedule.models import BingeRow, BuildConfig
-from binge_schedule.grid import load_grid_sheet, parse_monday, segments_for_day
+from binge_schedule.cursor_state import (
+    apply_saved_cursors,
+    resolved_cursor_state_path,
+    save_cursors_after_export,
+)
+from binge_schedule.models import BingeRow, BuildConfig, WeekDef
+from binge_schedule.grid import (
+    ensure_grids_workbooks_for_weeks,
+    load_grid_sheet,
+    parse_monday,
+    seed_grids_from_prior_month,
+    segments_for_day,
+    sync_straddle_weeks_to_canonical_grids_file,
+)
 
 # --- Legacy reference styling (matches APRIL 2026 BINGE / BINGE GRIDS examples) ---
 
@@ -561,20 +584,68 @@ def export_both(
     cfg: BuildConfig,
     out_dir: Path,
     *,
+    weeks: Optional[list[WeekDef]] = None,
     binge_row_overrides: Optional[list[BingeRowOverride]] = None,
     binge_ui_notes: Optional[dict[str, str]] = None,
-) -> tuple[Path, Path, list[str]]:
-    cat = build_catalog(cfg)
-    binge_sheets: dict[str, pd.DataFrame] = {}
-    grid_sheets: dict[str, tuple[list[list[Any]], list[list[Optional[str]]]]] = {}
+) -> tuple[Path, Path, list[str], list[str]]:
+    """Write **BINGE.xlsx** (full episode rows from Nikki) and **BINGE GRIDS.xlsx** (weekly strip layout).
 
-    for wk in cfg.weeks:
+    **BINGE** comes from ``rows_for_week`` (Nikki + cursors; optional ``reference_binge_file`` for advance/repeat).
+    If ``reference_binge_literal_copy_before`` is set, rows before that calendar date are **replaced** with the
+    reference April workbook (verbatim); later days stay generated. Cursors are reconciled from the final sheet.
+    **BINGE GRIDS** program cells match the source grids workbooks (show titles only) — not the enriched BINGE episode text.
+    """
+    week_list = weeks if weeks is not None else cfg.weeks
+    if not week_list:
+        raise ValueError("No weeks to export: pass ``weeks=`` or add entries under ``weeks:`` in config.")
+    ensure_grids_workbooks_for_weeks(week_list)
+    seed_messages = seed_grids_from_prior_month(week_list, cfg.weeks)
+    seed_messages.extend(sync_straddle_weeks_to_canonical_grids_file(week_list))
+    cat = build_catalog(cfg)
+    apply_saved_cursors(cat, resolved_cursor_state_path(cfg))
+    episode_actions, reference_binge_warning, reference_merge_notes = load_reference_episode_actions(
+        cfg
+    )
+    if reference_binge_warning:
+        seed_messages.append(reference_binge_warning)
+    seed_messages.extend(reference_merge_notes)
+    binge_sheets: dict[str, pd.DataFrame] = {}
+    week_by_label: dict[str, WeekDef] = {}
+    grid_raw_by_label: dict[str, list[list[Optional[str]]]] = {}
+
+    sync_mondays = {str(x).strip() for x in (cfg.reference_binge_sync_cursor_weeks or []) if str(x).strip()}
+
+    for wk in week_list:
+        mon = parse_monday(wk.monday)
+        if wk.monday in sync_mondays:
+            wdf = load_reference_week_dataframe(cfg, mon)
+            if wdf is not None:
+                seed_messages.extend(
+                    sync_cursors_from_reference_binge_week(
+                        cfg,
+                        cat,
+                        wdf,
+                        monday_label=wk.monday,
+                    )
+                )
+            else:
+                seed_messages.append(
+                    f"reference_binge_sync_cursor_weeks: no reference rows for week starting {wk.monday} in "
+                    f"{cfg.reference_binge_file!r}"
+                )
+
         grid_raw = load_grid_sheet(wk.grids_file, wk.sheet_name)
         label = sheet_label(wk.monday)
-        rows = rows_for_week(cfg, cat, grid_raw, wk.monday)
-        binge_sheets[label] = binge_rows_to_dataframe(rows)
-        mat = build_grids_matrix(parse_monday(wk.monday), grid_raw, cfg.gracenote_binge_id)
-        grid_sheets[label] = (mat, grid_raw)
+        grid_raw_by_label[label] = grid_raw
+        rows = rows_for_week(
+            cfg, cat, grid_raw, wk.monday, episode_actions=episode_actions
+        )
+        binge_sheets[label] = normalize_binge_df_columns(binge_rows_to_dataframe(rows))
+        merged_df, literal_notes = merge_literal_reference_binge_days(cfg, mon, binge_sheets[label])
+        binge_sheets[label] = merged_df
+        seed_messages.extend(literal_notes)
+        reconcile_catalog_from_binge_dataframe(cfg, cat, binge_sheets[label])
+        week_by_label[label] = wk
 
     override_warnings: list[str] = []
     if binge_row_overrides:
@@ -583,6 +654,13 @@ def export_both(
             binge_sheets[label] = updated
             for m in msgs:
                 override_warnings.append(f"{label}: {m}")
+
+    grid_sheets: dict[str, tuple[list[list[Any]], list[list[Optional[str]]]]] = {}
+    for label, wk in sorted(week_by_label.items(), key=lambda x: parse_monday(x[1].monday)):
+        mon = parse_monday(wk.monday)
+        grid_raw = grid_raw_by_label[label]
+        mat = build_grids_matrix(mon, grid_raw, cfg.gracenote_binge_id)
+        grid_sheets[label] = (mat, grid_raw)
 
     binge_path = out_dir / "BINGE.xlsx"
     grids_path = out_dir / "BINGE GRIDS.xlsx"
@@ -593,7 +671,8 @@ def export_both(
         override_records=binge_row_overrides if binge_row_overrides else None,
     )
     write_grids_workbook(grids_path, grid_sheets, cfg, ui_notes=None)
-    return binge_path, grids_path, override_warnings
+    save_cursors_after_export(cat, resolved_cursor_state_path(cfg))
+    return binge_path, grids_path, override_warnings, seed_messages
 
 
 def export_grids_from_binge_sheets(

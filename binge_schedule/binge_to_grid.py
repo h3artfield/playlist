@@ -25,6 +25,7 @@ def _find_col(df: pd.DataFrame, *candidates: str) -> str:
 def normalize_binge_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     remap = {}
+    cols_set = {str(c).strip() for c in out.columns}
     for c in out.columns:
         s = str(c).strip()
         if s == "FINISH TIME" and "FINISH TIME " not in [str(x).strip() for x in out.columns]:
@@ -35,6 +36,14 @@ def normalize_binge_df_columns(df: pd.DataFrame) -> pd.DataFrame:
             remap[c] = "EPISODE NAME "
     if remap:
         out = out.rename(columns=remap)
+    # Some BINGE exports put the date in column A without a "DATE" header (pandas → "Unnamed: 0").
+    cols_set = {str(c).strip() for c in out.columns}
+    if "DATE" not in cols_set and len(out.columns) >= 2:
+        c0, c1 = out.columns[0], str(out.columns[1]).strip()
+        if c1 == "START TIME" and (
+            str(c0).startswith("Unnamed") or not str(c0).strip()
+        ):
+            out = out.rename(columns={c0: "DATE"})
     return out
 
 

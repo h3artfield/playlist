@@ -10,3 +10,4 @@ out/
 *.xlsx~
 ~$*.xlsx
 .streamlit/secrets.toml
+config/episode_cursors.json

@@ -48,7 +48,7 @@ Send that link to anyone who should use the UI. They need a browser only.
 
 ## 5. Local vs cloud config
 
-- **Cloud:** the sidebar defaults to **`config/cloud.yaml`** (Gracenote ID only; no real Nikki file).
+- **Cloud:** the sidebar defaults to **`config/cloud.yaml`** (Gracenote ID only; no real content workbook).
 - **Your machine:** you can type **`config/april_2026.yaml`** (or any path) in the sidebar if you use paths that exist on disk.
 
 ## Updates

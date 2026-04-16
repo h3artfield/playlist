@@ -1,4 +1,4 @@
-BINGE tools (UI + command line)
+Playlist Builder (UI + command line)
 ================================
 
 ON THIS COMPUTER
@@ -23,4 +23,4 @@ Open Command Prompt in this folder, then:
   python -m binge_schedule -c config\april_2026.yaml -o out
 
 That builds BINGE.xlsx and BINGE GRIDS.xlsx from your grids workbook paths
-in the YAML (needs Nikki + grid files on disk at those paths).
+in the YAML (needs the content workbook + grid files on disk at those paths).

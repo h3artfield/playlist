@@ -16,8 +16,11 @@ call "%~dp0venv\Scripts\activate.bat"
 python -m pip install -q --upgrade pip
 pip install -q -r "%~dp0requirements.txt"
 
+REM Optional: default the sidebar to your real build YAML (forward slashes are fine).
+REM set "BINGE_CONFIG_PATH=%~dp0config\april_2026.yaml"
+
 echo.
-echo Opening BINGE UI in your browser...
+echo Opening Playlist Builder in your browser...
 python -m streamlit run "%~dp0streamlit_app.py" --server.headless true --browser.gatherUsageStats false
 
 pause

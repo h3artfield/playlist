@@ -1,5 +1,5 @@
 # Safe defaults for Streamlit Community Cloud (public repo).
-# Nikki / local grid paths are not used by the BINGE → Grids upload flow.
+# Content / local grid paths are not used by the BINGE → Grids upload flow.
 gracenote_binge_id: 45397
 nikki_workbook: "cloud/nikki_placeholder_not_used.xlsx"
 timezone_note: local
