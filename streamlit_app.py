@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import asdict
-from datetime import date
+from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, List, Optional
@@ -27,13 +27,20 @@ import streamlit as st
 from binge_schedule import nikki
 from binge_schedule.archive_normalize import normalize_episodes_for_archive
 from binge_schedule.config_io import load_build_config
+from binge_schedule.binge_overrides import BingeRowOverride, parse_flexible_time
 from binge_schedule.models import NikkiColumnHeaders, ShowDef
 from binge_schedule.cursor_state import resolved_cursor_state_path, resolved_nikki_workbook_path
 from binge_schedule.binge_to_grid import normalize_binge_df_columns
 from binge_schedule.export_xlsx import export_both, is_verbose_seed_noise
 from binge_schedule.show_swap import apply_show_swap, parse_schedule_anchor
 from binge_schedule.grid import (
+    day_dates,
     ensure_grids_workbooks_for_weeks,
+    load_grid_sheet,
+    parse_monday,
+    parse_sheet_tab_monday,
+    segments_for_day,
+    slot_label,
     weeks_with_monday_in_calendar_month,
 )
 from binge_schedule.workbook_discover import (
@@ -799,6 +806,153 @@ def _coerce_schedule_month_session(unlocked: list[date], completed: set[str]) ->
         st.session_state[key] = want
 
 
+def _sorted_weeks(weeks: list) -> list:
+    return sorted(weeks, key=lambda w: parse_monday(w.monday))
+
+
+def _weeks_for_unlocked_months(weeks: list, unlocked_months: list[date]) -> list:
+    mm = {(d.year, d.month) for d in unlocked_months}
+    return [w for w in _sorted_weeks(weeks) if (parse_monday(w.monday).year, parse_monday(w.monday).month) in mm]
+
+
+def _effective_weeks_from_start(all_weeks: list, start_on: date, count: int) -> list:
+    if not all_weeks:
+        return []
+    sorted_weeks = _sorted_weeks(all_weeks)
+    start_idx = 0
+    for i, w in enumerate(sorted_weeks):
+        mon = parse_monday(w.monday)
+        if mon <= start_on < mon + timedelta(days=7):
+            start_idx = i
+            break
+        if mon >= start_on:
+            start_idx = i
+            break
+    tail = sorted_weeks[start_idx:]
+    return tail[: max(1, int(count))]
+
+
+def _format_duration_minutes(minutes: int) -> str:
+    h, m = divmod(int(minutes), 60)
+    if h and m:
+        return f"{h}h {m}m"
+    if h:
+        return f"{h}h"
+    return f"{m}m"
+
+
+def _schedule_template_slots(weeks: list) -> tuple[list[dict[str, Any]], list[str]]:
+    slots: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for w in _sorted_weeks(weeks):
+        mon = parse_monday(w.monday)
+        try:
+            grid = load_grid_sheet(w.grids_file, w.sheet_name)
+        except Exception as e:  # noqa: BLE001
+            warnings.append(f"Could not load template grid `{w.sheet_name}` in `{Path(w.grids_file).name}`: {e}")
+            continue
+        dates = day_dates(mon)
+        for day_idx in range(7):
+            col = [grid[r][day_idx] for r in range(48)]
+            try:
+                segs = segments_for_day(col)
+            except ValueError as e:
+                warnings.append(f"Bad grid column in `{w.sheet_name}` (day {day_idx}): {e}")
+                continue
+            for seg in segs:
+                minutes = int(seg.end_slot - seg.start_slot) * 30
+                d = dates[day_idx]
+                st = slot_label(seg.start_slot)
+                fin = slot_label(seg.end_slot % 48)
+                show_text = str(seg.cell_text).strip()
+                slot_id = f"{d.isoformat()}|{st}|{day_idx}|{seg.start_slot}|{w.monday}"
+                slots.append(
+                    {
+                        "slot_id": slot_id,
+                        "date": d,
+                        "date_iso": d.isoformat(),
+                        "week_monday": w.monday,
+                        "day_index": day_idx,
+                        "start_slot": int(seg.start_slot),
+                        "end_slot": int(seg.end_slot),
+                        "start": st,
+                        "finish": fin,
+                        "duration_minutes": minutes,
+                        "duration_label": _format_duration_minutes(minutes),
+                        "show": show_text,
+                        "sheet_name": w.sheet_name,
+                    }
+                )
+    slots.sort(key=lambda r: (r["date_iso"], r["start_slot"], r["show"].casefold()))
+    return slots, warnings
+
+
+def _slot_picker_label(row: dict[str, Any]) -> str:
+    return (
+        f"{row['date_iso']} {row['start']}-{row['finish']} ({row['duration_label']}) · "
+        f"{row['show']} · week {row['week_monday']}"
+    )
+
+
+def _monday_for_calendar_date(d: date) -> date:
+    return d - timedelta(days=d.weekday())
+
+
+def _map_output_grid_tabs_by_monday(grids_path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    try:
+        import openpyxl
+
+        wb = openpyxl.load_workbook(grids_path, read_only=True)
+        try:
+            for sn in wb.sheetnames:
+                md = parse_sheet_tab_monday(sn)
+                if md is not None:
+                    out[md.isoformat()] = sn
+        finally:
+            wb.close()
+    except Exception:  # noqa: BLE001
+        return out
+    return out
+
+
+def _apply_output_grid_slot_replacements(
+    grids_path: Path,
+    slot_rows: list[dict[str, Any]],
+    new_display: str,
+) -> list[str]:
+    msgs: list[str] = []
+    if not grids_path.is_file():
+        return [f"OTO grids update skipped: output file missing `{grids_path}`."]
+    tab_by_monday = _map_output_grid_tabs_by_monday(grids_path)
+    if not tab_by_monday:
+        return [f"OTO grids update skipped: could not map week tabs in `{grids_path.name}`."]
+    try:
+        import openpyxl
+
+        wb = openpyxl.load_workbook(grids_path, read_only=False, data_only=False)
+    except OSError as e:
+        return [f"OTO grids update skipped: could not open `{grids_path}` ({e})."]
+    changed = 0
+    try:
+        for r in slot_rows:
+            d = r["date"]
+            mon_key = _monday_for_calendar_date(d).isoformat()
+            tab = tab_by_monday.get(mon_key)
+            if not tab or tab not in wb.sheetnames:
+                continue
+            ws = wb[tab]
+            col = 2 + int(r["day_index"])
+            for slot in range(int(r["start_slot"]), int(r["end_slot"])):
+                ws.cell(row=5 + slot, column=col, value=new_display)
+                changed += 1
+        wb.save(grids_path)
+    finally:
+        wb.close()
+    msgs.append(f"OTO grids update: replaced {changed} output cell(s) with `{new_display}` in `{grids_path.name}`.")
+    return msgs
+
+
 def _list_xlsx_sheet_names(path: Path) -> list[str]:
     import openpyxl
 
@@ -1402,14 +1556,210 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
             f"**{unlocked[-1].strftime('%B %Y')}** (or delete `schedule_build_state.json` / legacy `playlist_build_state.json` next to your setup to reset)."
         )
 
-    selected_weeks = _weeks_in_month(cfg.weeks, month_start)
-    if not selected_weeks:
+    month_weeks = _weeks_in_month(cfg.weeks, month_start)
+    if not month_weeks:
         st.warning(
             f"No **`weeks:`** entries yet for **{month_start.strftime('%B %Y')}**. "
             "Add one block per Monday (same shape as April: `monday`, `grids_file`, `sheet_name`). "
             "Episode order still comes from your cursor file after April."
         )
         return
+
+    buildable_weeks = _weeks_for_unlocked_months(cfg.weeks, unlocked)
+    if not buildable_weeks:
+        st.error("No weeks are currently unlocked to build.")
+        return
+
+    st.markdown("##### Build options")
+    min_day = parse_monday(buildable_weeks[0].monday)
+    max_day = parse_monday(buildable_weeks[-1].monday) + timedelta(days=6)
+    default_start = parse_monday(month_weeks[0].monday)
+    start_date = st.date_input(
+        "Start date",
+        value=default_start,
+        min_value=min_day,
+        max_value=max_day,
+        key="schedule_start_date",
+        help="First calendar day to anchor this run (the app uses the containing Monday week).",
+    )
+    all_from_start = _effective_weeks_from_start(buildable_weeks, start_date, len(buildable_weeks))
+    if not all_from_start:
+        st.warning("No weeks available from that start date.")
+        return
+    default_weeks = min(max(1, len(month_weeks)), len(all_from_start))
+    week_count = int(
+        st.number_input(
+            "How many weeks",
+            min_value=1,
+            max_value=len(all_from_start),
+            value=default_weeks,
+            step=1,
+            key="schedule_week_count",
+        )
+    )
+    selected_weeks = all_from_start[:week_count]
+    selected_mondays = [w.monday for w in selected_weeks]
+    st.caption(
+        f"Selected weeks: **{len(selected_weeks)}** · "
+        + ", ".join(f"`{m}`" for m in selected_mondays)
+    )
+
+    template_slots, template_warnings = _schedule_template_slots(selected_weeks)
+    for wmsg in template_warnings:
+        st.warning(wmsg)
+    if not template_slots:
+        st.warning("No schedule blocks were found in the selected weeks' grids.")
+        return
+
+    st.markdown("##### Interactive weekly template")
+    st.caption(
+        "Pick existing schedule blocks, then choose replacement programs. "
+        "This editor uses grids blocks and applies date/start anchors for deterministic updates."
+    )
+    template_df = pd.DataFrame(
+        {
+            "Date": [r["date_iso"] for r in template_slots],
+            "Start": [r["start"] for r in template_slots],
+            "Finish": [r["finish"] for r in template_slots],
+            "Duration": [r["duration_label"] for r in template_slots],
+            "Show": [r["show"] for r in template_slots],
+            "Week Monday": [r["week_monday"] for r in template_slots],
+        }
+    )
+    st.dataframe(template_df, use_container_width=True, height=280, hide_index=True)
+
+    slot_by_id = {r["slot_id"]: r for r in template_slots}
+    slot_ids = [r["slot_id"] for r in template_slots]
+
+    yaml_keys = sorted(cfg.shows.keys(), key=lambda k: cfg.shows[k].display_name.lower())
+    extra_tab_names: list[str] = []
+    if nikki.is_file():
+        tabs = _nikki_workbook_sheet_names(str(nikki.resolve()), _nikki_mtime(nikki))
+        extra_tab_names = workbook_tabs_not_in_yaml(cfg, tabs)
+    extra_opts = [workbook_tab_option(t) for t in extra_tab_names]
+    archive_options = yaml_keys + extra_opts
+
+    def _archive_pick_label(opt: str) -> str:
+        tab = parse_workbook_tab_option(opt)
+        if tab is not None:
+            return f"{tab} _(not on schedule)_"
+        return cfg.shows[opt].display_name
+
+    use_oto = st.checkbox(
+        "Add OTO (one-time-only) changes for this run only",
+        key="build_use_oto_changes",
+    )
+    oto_rows: list[dict[str, Any]] = []
+    oto_pick: Optional[str] = None
+    if use_oto:
+        oto_ids = st.multiselect(
+            "OTO: select schedule blocks",
+            slot_ids,
+            format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
+            key="build_oto_slot_ids",
+        )
+        oto_rows = [slot_by_id[sid] for sid in oto_ids if sid in slot_by_id]
+        if archive_options:
+            oto_pick = st.selectbox(
+                "OTO replacement show",
+                archive_options,
+                format_func=_archive_pick_label,
+                key="build_oto_pick",
+            )
+        if oto_rows:
+            dur = sum(int(r["duration_minutes"]) for r in oto_rows)
+            st.caption(f"OTO selected duration to fill: **{_format_duration_minutes(dur)}**")
+
+    use_mass = st.checkbox(
+        "Add mass changes and persist them to source schedule files",
+        key="build_use_mass_changes",
+    )
+    mass_rows: list[dict[str, Any]] = []
+    mass_pick: Optional[str] = None
+    if use_mass:
+        base_ids = st.multiselect(
+            "Mass: select seed blocks",
+            slot_ids,
+            format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
+            key="build_mass_seed_ids",
+        )
+        expand_pattern = st.checkbox(
+            "Expand seeds across selected weeks (same weekday + start slot + current show)",
+            value=True,
+            key="build_mass_expand_pattern",
+        )
+        if expand_pattern and base_ids:
+            expanded: set[str] = set()
+            for sid in base_ids:
+                src = slot_by_id.get(sid)
+                if not src:
+                    continue
+                for row in template_slots:
+                    if (
+                        row["day_index"] == src["day_index"]
+                        and row["start_slot"] == src["start_slot"]
+                        and row["show"].casefold() == src["show"].casefold()
+                    ):
+                        expanded.add(row["slot_id"])
+            mass_rows = [slot_by_id[sid] for sid in sorted(expanded)]
+            st.caption(f"Pattern expansion selected **{len(mass_rows)}** blocks.")
+        else:
+            mass_rows = [slot_by_id[sid] for sid in base_ids if sid in slot_by_id]
+        if archive_options:
+            mass_pick = st.selectbox(
+                "Mass replacement show",
+                archive_options,
+                format_func=_archive_pick_label,
+                key="build_mass_pick",
+            )
+        if mass_rows:
+            dur = sum(int(r["duration_minutes"]) for r in mass_rows)
+            st.caption(f"Mass selected duration to fill: **{_format_duration_minutes(dur)}**")
+        st.warning(
+            "Mass changes write into your source grids/setup and affect future builds."
+        )
+
+    if use_mass:
+        st.checkbox(
+            "I understand mass changes persist to source files.",
+            key="build_mass_confirm",
+        )
+
+    st.markdown("##### Preview changes")
+    st.caption(
+        "Quick preflight before export: OTO changes affect only this output; mass changes update source files for future runs."
+    )
+    preview_lines = [
+        f"- Build window: **{start_date.isoformat()}** + **{len(selected_weeks)}** week(s)",
+        f"- Weeks: {', '.join(f'`{w.monday}`' for w in selected_weeks)}",
+    ]
+    if use_oto:
+        oto_dur = _format_duration_minutes(sum(int(r["duration_minutes"]) for r in oto_rows)) if oto_rows else "0m"
+        oto_name = _display_name_for_archive_pick(cfg, oto_pick) if oto_pick else "—"
+        preview_lines.append(
+            f"- OTO: **{len(oto_rows)}** block(s), duration **{oto_dur}**, replacement **{oto_name}** (output-only)"
+        )
+    else:
+        preview_lines.append("- OTO: none")
+    if use_mass:
+        mass_dur = _format_duration_minutes(sum(int(r["duration_minutes"]) for r in mass_rows)) if mass_rows else "0m"
+        mass_name = _display_name_for_archive_pick(cfg, mass_pick) if mass_pick else "—"
+        preview_lines.append(
+            f"- Mass: **{len(mass_rows)}** block(s), duration **{mass_dur}**, replacement **{mass_name}** (persists to source)"
+        )
+    else:
+        preview_lines.append("- Mass: none")
+    st.markdown("\n".join(preview_lines))
+
+    preflight_issues: list[str] = []
+    if use_oto and (not oto_rows or not oto_pick):
+        preflight_issues.append("OTO is enabled but block selection and/or replacement show is missing.")
+    if use_mass and (not mass_rows or not mass_pick):
+        preflight_issues.append("Mass is enabled but block selection and/or replacement show is missing.")
+    if use_mass and not st.session_state.get("build_mass_confirm"):
+        preflight_issues.append("Mass persistence confirmation is not checked.")
+    for issue in preflight_issues:
+        st.warning(issue)
 
     stations_input = st.text_input(
         "Stations (optional)",
@@ -1422,10 +1772,81 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         "Create BINGE files",
         type="primary",
         use_container_width=True,
+        disabled=bool(preflight_issues),
         help=f"{len(selected_weeks)} week tab(s) for {month_start.strftime('%B %Y')}.",
     )
 
     if run:
+        can_run = True
+        oto_overrides: list[BingeRowOverride] = []
+        oto_display = ""
+        if use_oto:
+            if not oto_rows:
+                st.error("OTO changes are enabled, but no schedule blocks are selected.")
+                can_run = False
+            elif not oto_pick:
+                st.error("OTO changes are enabled, but no replacement show was selected.")
+                can_run = False
+            else:
+                oto_display = _display_name_for_archive_pick(cfg, oto_pick)
+                for row in oto_rows:
+                    st_norm = parse_flexible_time(str(row["start"]))
+                    fin_norm = parse_flexible_time(str(row["finish"]))
+                    oto_overrides.append(
+                        BingeRowOverride(
+                            match_date=row["date"],
+                            match_start=st_norm,
+                            new_date=row["date"],
+                            new_start=st_norm,
+                            new_finish=fin_norm,
+                            new_episode=oto_display,
+                            new_show=oto_display,
+                            new_episode_num=oto_display,
+                            new_episode_name=oto_display,
+                        )
+                    )
+
+        if use_mass:
+            if not st.session_state.get("build_mass_confirm"):
+                st.error("Confirm that mass changes persist to source files before running.")
+                can_run = False
+            elif not mass_rows:
+                st.error("Mass changes are enabled, but no schedule blocks are selected.")
+                can_run = False
+            elif not mass_pick:
+                st.error("Mass changes are enabled, but no replacement show was selected.")
+                can_run = False
+
+        if use_mass and can_run and mass_pick:
+            mass_total_changed = 0
+            mass_messages: list[str] = []
+            for row in mass_rows:
+                ok, msgs = apply_show_swap(
+                    cfg_path,
+                    [str(row["show"])],
+                    mass_pick,
+                    schedule_anchor={"date": row["date"], "start": row["start"]},
+                )
+                mass_messages.extend(msgs)
+                if ok:
+                    mass_total_changed += 1
+                else:
+                    can_run = False
+            if mass_total_changed:
+                st.success(f"Mass source changes applied to **{mass_total_changed}** selected block(s).")
+            for m in mass_messages:
+                if "no grid change" in str(m).casefold():
+                    st.info(m)
+                elif "could not" in str(m).casefold() or "missing" in str(m).casefold():
+                    st.warning(m)
+                else:
+                    st.caption(m)
+            if can_run:
+                cfg = load_build_config(cfg_path)
+
+        if not can_run:
+            return
+
         try:
             created_grids = ensure_grids_workbooks_for_weeks(selected_weeks)
         except (OSError, ValueError) as e:
@@ -1451,12 +1872,34 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
             try:
                 with st.spinner("Working…"):
                     binge_path, grids_path, ovw, seeded = export_both(
-                        cfg, out_dir, weeks=selected_weeks, export_stations=station_kw
+                        cfg,
+                        out_dir,
+                        weeks=selected_weeks,
+                        binge_row_overrides=oto_overrides or None,
+                        binge_ui_notes={
+                            "Build window": (
+                                f"start={start_date.isoformat()} · weeks={len(selected_weeks)}"
+                            ),
+                            "OTO changes": (
+                                f"{len(oto_overrides)} row override(s)"
+                                if oto_overrides
+                                else "none"
+                            ),
+                            "Mass changes": (
+                                f"{len(mass_rows)} slot swap(s) persisted to source"
+                                if use_mass and mass_rows
+                                else "none"
+                            ),
+                        },
+                        export_stations=station_kw,
                     )
             except Exception as e:
                 st.error(str(e))
                 st.exception(e)
             else:
+                if oto_rows and oto_display:
+                    for msg in _apply_output_grid_slot_replacements(grids_path, oto_rows, oto_display):
+                        st.info(msg)
                 st.session_state["binge_path"] = binge_path
                 st.session_state["grids_path"] = grids_path
                 st.session_state["out_dir"] = out_dir
@@ -1474,7 +1917,14 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                         st.warning(s)
                 for w in ovw:
                     st.warning(w)
-                _record_completed_month(cfg_path, month_start)
+                built_months = sorted(
+                    {
+                        (parse_monday(w.monday).year, parse_monday(w.monday).month)
+                        for w in selected_weeks
+                    }
+                )
+                for y, m in built_months:
+                    _record_completed_month(cfg_path, date(y, m, 1))
 
     if "binge_path" in st.session_state and "grids_path" in st.session_state:
         st.markdown("##### Latest files")
