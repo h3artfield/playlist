@@ -243,8 +243,17 @@ def _mobile_styles() -> None:
     )
 
 
+_MAIN_NAV_OPTIONS = ("Build", "Content archive", "Playlist")
+# Must not assign to ``main_nav_tabs`` after the segmented control renders — use ``main_nav_pending`` + rerun instead.
+_MAIN_NAV_PENDING_KEY = "main_nav_pending"
+
+
 def _render_top_nav() -> str:
     """Primary section switcher — top bar (replaces sidebar nav). Returns selected page name."""
+    pending = st.session_state.pop(_MAIN_NAV_PENDING_KEY, None)
+    if pending in _MAIN_NAV_OPTIONS:
+        st.session_state["main_nav_tabs"] = pending
+
     st.markdown(
         '<h1 style="margin:0 0 0.5rem 0;font-size:1.35rem;font-weight:700;line-height:1.25;">'
         "Build playlist, content archive, and playlists"
@@ -259,7 +268,7 @@ def _render_top_nav() -> str:
         if hasattr(st, "segmented_control"):
             page = st.segmented_control(
                 "Section",
-                options=("Build", "Content archive", "Playlist"),
+                options=_MAIN_NAV_OPTIONS,
                 key="main_nav_tabs",
                 label_visibility="collapsed",
                 width="stretch",
@@ -267,7 +276,7 @@ def _render_top_nav() -> str:
         else:
             page = st.radio(
                 "Section",
-                ("Build", "Content archive", "Playlist"),
+                _MAIN_NAV_OPTIONS,
                 horizontal=True,
                 key="main_nav_tabs",
                 label_visibility="collapsed",
@@ -788,7 +797,7 @@ def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
                             "binge_sheet": bs,
                             "binge_row": picked_row_idx + 1,
                         }
-                        st.session_state["main_nav_tabs"] = "Content archive"
+                        st.session_state[_MAIN_NAV_PENDING_KEY] = "Content archive"
                         st.rerun()
         else:
             st.dataframe(binge_df, use_container_width=True, height=340, hide_index=True)
@@ -925,7 +934,7 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
                         "messages": swap_msgs,
                     }
                     st.session_state.pop("swap_context", None)
-                    st.session_state["main_nav_tabs"] = "Playlist"
+                    st.session_state[_MAIN_NAV_PENDING_KEY] = "Playlist"
                     st.rerun()
                 else:
                     for m in swap_msgs:
