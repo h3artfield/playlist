@@ -56,9 +56,20 @@ def _show_from_dict(key: str, d: dict[str, Any]) -> ShowDef:
     )
 
 
+def _resolve_path_relative_to_config(config_dir: Path, value: str) -> str:
+    """Absolute paths stay as-is; relative paths resolve against the directory containing the setup YAML."""
+    raw = Path(str(value).strip())
+    if not str(raw):
+        return str(raw)
+    if raw.is_absolute():
+        return str(raw.expanduser().resolve())
+    return str((config_dir / raw).resolve())
+
+
 def load_build_config(path: str | Path) -> BuildConfig:
     p = Path(path)
     raw = yaml.safe_load(p.read_text(encoding="utf-8"))
+    config_dir = p.parent.resolve()
     shows: dict[str, ShowDef] = {}
     for key, d in (raw.get("shows") or {}).items():
         shows[key] = _show_from_dict(key, d)
@@ -67,7 +78,7 @@ def load_build_config(path: str | Path) -> BuildConfig:
         weeks.append(
             WeekDef(
                 monday=w["monday"],
-                grids_file=w["grids_file"],
+                grids_file=_resolve_path_relative_to_config(config_dir, w["grids_file"]),
                 sheet_name=w["sheet_name"],
             )
         )

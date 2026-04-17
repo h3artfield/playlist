@@ -12,7 +12,8 @@ wrap_episodes: true
 # Next-episode index per show (JSON next to this YAML). Omit to always use start_episode_index from shows:.
 cursor_state_file: episode_cursors.json
 # Canonical April BINGE: new vs rerun (same EPISODE code as previous row for that show) is read from this file.
-reference_binge_file: "C:/Users/h3art/Downloads/APRIL 2026 BINGE.xlsx"
+# Repo copy — required for Streamlit Cloud (paths are relative to this YAML file’s folder).
+reference_binge_file: "../data/APRIL 2026 BINGE.xlsx"
 reference_binge_sheet: "4-27-2026"
 # Merge advance/repeat rules from every tab in that workbook (all April weeks); first sheet wins on conflicts.
 reference_binge_all_sheets: true
@@ -128,29 +129,29 @@ shows:
 
 weeks:
   - monday: "2026-04-06"
-    grids_file: "C:/Users/h3art/Downloads/APRIL 2026 BINGE GRIDS.xlsx"
+    grids_file: "../data/APRIL 2026 BINGE GRIDS.xlsx"
     sheet_name: "4-6-2026"
   - monday: "2026-04-13"
-    grids_file: "C:/Users/h3art/Downloads/APRIL 2026 BINGE GRIDS.xlsx"
+    grids_file: "../data/APRIL 2026 BINGE GRIDS.xlsx"
     sheet_name: "4-13-2026"
   - monday: "2026-04-20"
-    grids_file: "C:/Users/h3art/Downloads/APRIL 2026 BINGE GRIDS.xlsx"
+    grids_file: "../data/APRIL 2026 BINGE GRIDS.xlsx"
     sheet_name: "4-20-2026"
   - monday: "2026-04-27"
-    grids_file: "C:/Users/h3art/Downloads/APRIL 2026 BINGE GRIDS.xlsx"
+    grids_file: "../data/APRIL 2026 BINGE GRIDS.xlsx"
     sheet_name: "4-27-2026"
   # May — same pattern as April; point grids_file / sheet_name at your May grids workbook & tabs.
   # When you build **May**, the week starting 2026-04-27 is included (Apr 27–May 3) so Fri–Sun May 1–3 appear.
   # That tab is copied into the May grids file on export if it still lives under the April workbook above.
   - monday: "2026-05-04"
-    grids_file: "C:/Users/h3art/Downloads/MAY 2026 BINGE GRIDS.xlsx"
+    grids_file: "../data/MAY 2026 BINGE GRIDS.xlsx"
     sheet_name: "5-4-2026"
   - monday: "2026-05-11"
-    grids_file: "C:/Users/h3art/Downloads/MAY 2026 BINGE GRIDS.xlsx"
+    grids_file: "../data/MAY 2026 BINGE GRIDS.xlsx"
     sheet_name: "5-11-2026"
   - monday: "2026-05-18"
-    grids_file: "C:/Users/h3art/Downloads/MAY 2026 BINGE GRIDS.xlsx"
+    grids_file: "../data/MAY 2026 BINGE GRIDS.xlsx"
     sheet_name: "5-18-2026"
   - monday: "2026-05-25"
-    grids_file: "C:/Users/h3art/Downloads/MAY 2026 BINGE GRIDS.xlsx"
+    grids_file: "../data/MAY 2026 BINGE GRIDS.xlsx"
     sheet_name: "5-25-2026"
