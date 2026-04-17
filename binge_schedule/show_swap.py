@@ -4,15 +4,23 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date, time, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import yaml
 from openpyxl import load_workbook
+from openpyxl.cell.cell import MergedCell
 
+from binge_schedule.binge_to_grid import (
+    parse_binge_date_cell,
+    parse_binge_time_cell,
+    wall_time_to_slot_start,
+)
 from binge_schedule.config_io import load_build_config
 from binge_schedule.cursor_state import resolved_cursor_state_path
-from binge_schedule.models import BuildConfig, ShowDef
+from binge_schedule.grid import load_grid_sheet, parse_monday, segments_for_day
+from binge_schedule.models import BuildConfig, ShowDef, WeekDef
 from binge_schedule.workbook_discover import parse_workbook_tab_option, synthetic_series_for_tab
 
 
@@ -68,6 +76,112 @@ def _showdef_to_yaml_dict(sd: ShowDef) -> dict[str, Any]:
     if sd.binge_row_minutes != 30:
         d["binge_row_minutes"] = sd.binge_row_minutes
     return d
+
+
+def _week_def_for_date(cfg: BuildConfig, d: date) -> Optional[WeekDef]:
+    for w in cfg.weeks:
+        m = parse_monday(w.monday)
+        if m <= d < m + timedelta(days=7):
+            return w
+    return None
+
+
+def _parse_schedule_anchor(raw: Any) -> Optional[tuple[date, time]]:
+    if raw is None or not isinstance(raw, dict):
+        return None
+    dv = raw.get("date")
+    sv = raw.get("start")
+    if dv is None or sv is None:
+        return None
+    try:
+        d = parse_binge_date_cell(dv)
+        t = parse_binge_time_cell(sv)
+        return d, t
+    except (ValueError, TypeError):
+        return None
+
+
+def _write_grid_program_cell(ws, excel_row: int, excel_col: int, new_val: str) -> bool:
+    cell = ws.cell(row=excel_row, column=excel_col)
+    if isinstance(cell, MergedCell):
+        for rng in ws.merged_cells.ranges:
+            if rng.min_row <= excel_row <= rng.max_row and rng.min_col <= excel_col <= rng.max_col:
+                ws.cell(rng.min_row, rng.min_col).value = new_val
+                return True
+        return False
+    cell.value = new_val
+    return True
+
+
+def _rewrite_grids_target_segment(
+    gpath: Path,
+    sheet_name: str,
+    day_index: int,
+    slot: int,
+    old_labels: list[str],
+    new_display: str,
+) -> tuple[int, list[str]]:
+    """Replace only the program block that contains ``slot`` on ``day_index`` (one BINGE row / airing)."""
+    warnings: list[str] = []
+    if not gpath.is_file():
+        return 0, [f"Grids workbook missing: {gpath}"]
+    try:
+        grid = load_grid_sheet(str(gpath), sheet_name)
+    except Exception as e:
+        return 0, [f"Could not load grid `{sheet_name}` in `{gpath.name}`: {e}"]
+    if not (0 <= day_index <= 6):
+        return 0, [f"Invalid day index {day_index}."]
+    if not (0 <= slot < 48):
+        return 0, [f"Invalid time slot {slot}."]
+
+    col = [grid[r][day_index] for r in range(48)]
+    try:
+        segs = segments_for_day(col)
+    except ValueError as e:
+        return 0, [str(e)]
+
+    target = None
+    for seg in segs:
+        if seg.start_slot <= slot < seg.end_slot:
+            target = seg
+            break
+    if target is None:
+        return 0, [
+            "No program block contains that date/time in the grids (check **DATE** / **START TIME** on the BINGE row)."
+        ]
+
+    wb = None
+    changed = 0
+    excel_col = 2 + day_index
+    try:
+        wb = load_workbook(gpath, read_only=False, data_only=False)
+        if sheet_name not in wb.sheetnames:
+            return 0, [f"Sheet `{sheet_name}` not in `{gpath.name}`."]
+        ws = wb[sheet_name]
+        for r in range(target.start_slot, target.end_slot):
+            raw = col[r]
+            if raw is None or not str(raw).strip():
+                continue
+            s = str(raw).strip()
+            new_s = replace_cell_show_text(s, old_labels, new_display)
+            if new_s != s:
+                if _write_grid_program_cell(ws, 5 + r, excel_col, new_s):
+                    changed += 1
+        if changed == 0:
+            new_s = replace_cell_show_text(target.cell_text, old_labels, new_display)
+            if new_s != target.cell_text.strip():
+                if _write_grid_program_cell(ws, 5 + target.start_slot, excel_col, new_s):
+                    changed = 1
+        wb.save(gpath)
+    except OSError as e:
+        return changed, [f"Could not open/save {gpath}: {e}"]
+    finally:
+        if wb is not None:
+            try:
+                wb.close()
+            except Exception:
+                pass
+    return changed, warnings
 
 
 def _rewrite_grids_file(path: Path, sheet_names: set[str], old_labels: list[str], new_display: str) -> tuple[int, list[str]]:
@@ -139,14 +253,19 @@ def apply_show_swap(
     cfg_path: Path,
     old_show_labels: list[str],
     archive_pick: str,
+    *,
+    schedule_anchor: Any = None,
 ) -> tuple[bool, list[str]]:
     """
-    Persist a show swap:
+    Persist a show swap.
 
-    - Replace **old_show_labels** in every configured grids sheet (same 48×7 block as scheduling) with the
-      replacement show's **display_name**.
-    - If **archive_pick** is a workbook tab not yet on the playlist, append a **shows:** entry to the YAML
-      and seed the cursor file for that key.
+    With **schedule_anchor** ``{\"date\", \"start\"}`` from the BINGE row, only the grid **block for that
+    date/time** is updated (the correct April vs May workbook is chosen by date).
+
+    Without an anchor, every matching cell in all weeks is updated (legacy bulk behavior).
+
+    If **archive_pick** is a workbook tab not yet on the playlist, append a **shows:** entry to the YAML
+    and seed the cursor file for that key.
 
     Does not edit the Nikki ``.xlsx`` binary; new series use existing tabs via ``nikki_sheet`` in YAML.
 
@@ -228,26 +347,50 @@ def apply_show_swap(
         cfg = load_build_config(cfg_path)
         messages.extend(_ensure_cursor_entry(cfg, new_key))
 
-    # Grids: unique (file, sheet) from weeks
     by_file: dict[Path, set[str]] = {}
     for w in cfg.weeks:
         p = Path(w.grids_file).resolve()
         by_file.setdefault(p, set()).add(w.sheet_name)
 
+    anchor_t = _parse_schedule_anchor(schedule_anchor)
     total_cells = 0
-    for gpath, sheets in by_file.items():
-        n, warns = _rewrite_grids_file(gpath, sheets, olds, new_display)
-        total_cells += n
+
+    if anchor_t is not None:
+        d, tm = anchor_t
+        wd = _week_def_for_date(cfg, d)
+        if wd is None:
+            return False, [f"No **weeks:** entry covers calendar date **{d.isoformat()}**."]
+        monday = parse_monday(wd.monday)
+        day_index = (d - monday).days
+        if not (0 <= day_index <= 6):
+            return False, [f"Date **{d}** does not fall in the ISO week starting **{wd.monday}**."]
+        slot = wall_time_to_slot_start(tm)
+        gpath = Path(wd.grids_file).resolve()
+        n, warns = _rewrite_grids_target_segment(gpath, wd.sheet_name, day_index, slot, olds, new_display)
         messages.extend(warns)
+        total_cells = n
         if n:
-            messages.append(f"Updated **{n}** grid cell(s) in `{gpath.name}`.")
+            messages.append(
+                f"Updated **{n}** cell(s) in `{gpath.name}` · `{wd.sheet_name}` — **only** the airing "
+                f"**{d.isoformat()}** **{tm.strftime('%H:%M')}** (other dates/weeks left as-is)."
+            )
+    else:
+        messages.append(
+            "**No DATE/START TIME anchor** — updated **every** matching program cell in **all** configured grid weeks."
+        )
+        for gpath, sheets in by_file.items():
+            n, warns = _rewrite_grids_file(gpath, sheets, olds, new_display)
+            total_cells += n
+            messages.extend(warns)
+            if n:
+                messages.append(f"Updated **{n}** grid cell(s) in `{gpath.name}`.")
 
     if not by_file:
         messages.append("No **weeks:** in config — grids were not changed.")
 
     if total_cells == 0 and by_file:
         messages.append(
-            "No grid cells matched the old label(s). Check that **SHOW** labels match **display_name** text in grids."
+            "No grid cells matched the old label(s) in the target block. Check that **SHOW** matches **display_name** text in that grid cell."
         )
 
     messages.append(f"Replacement **display_name** used in grids: **{new_display}**.")

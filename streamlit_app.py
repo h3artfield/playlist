@@ -654,6 +654,15 @@ def _find_binge_column_ci(df: pd.DataFrame, name: str) -> Optional[str]:
     return None
 
 
+def _schedule_anchor_dict_from_binge_row(df: pd.DataFrame, idx: int) -> Optional[dict[str, Any]]:
+    """DATE + START TIME from a BINGE row for single-slot grid edits."""
+    dc = _find_binge_column_ci(df, "DATE")
+    sc = _find_binge_column_ci(df, "START TIME")
+    if not dc or not sc:
+        return None
+    return {"date": df.iloc[int(idx)][dc], "start": df.iloc[int(idx)][sc]}
+
+
 def _binge_row_swap_summary(df: pd.DataFrame, idx: int) -> str:
     """One-line label for fallback row picker."""
     r = df.iloc[int(idx)]
@@ -793,13 +802,21 @@ def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
                     if not show_val:
                         st.warning("That row has no SHOW value.")
                     else:
-                        st.session_state["swap_context"] = {
-                            "old_show_labels": [show_val],
-                            "binge_sheet": bs,
-                            "binge_row": picked_row_idx + 1,
-                        }
-                        st.session_state[_MAIN_NAV_PENDING_KEY] = "Content archive"
-                        st.rerun()
+                        anchor_dict = _schedule_anchor_dict_from_binge_row(binge_df, picked_row_idx)
+                        if anchor_dict is None:
+                            st.warning(
+                                "This BINGE sheet needs **DATE** and **START TIME** columns so we only edit "
+                                "**that** clock slot in the grids (not every week)."
+                            )
+                        else:
+                            st.session_state["swap_context"] = {
+                                "old_show_labels": [show_val],
+                                "binge_sheet": bs,
+                                "binge_row": picked_row_idx + 1,
+                                "schedule_anchor": anchor_dict,
+                            }
+                            st.session_state[_MAIN_NAV_PENDING_KEY] = "Content archive"
+                            st.rerun()
         else:
             st.dataframe(binge_df, use_container_width=True, height=340, hide_index=True)
             if show_swap and not show_col:
@@ -926,6 +943,7 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
                     cfg_path,
                     list(swap_ctx.get("old_show_labels") or []),
                     pick,
+                    schedule_anchor=swap_ctx.get("schedule_anchor"),
                 )
                 if ok:
                     st.session_state["swap_result"] = {
