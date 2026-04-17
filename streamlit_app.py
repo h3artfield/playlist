@@ -12,6 +12,7 @@ import inspect
 import json
 import os
 import platform
+import shutil
 import subprocess
 import tempfile
 from dataclasses import asdict
@@ -62,9 +63,18 @@ def _open_folder(path: Path) -> str:
         elif system == "Darwin":
             subprocess.Popen(["open", str(p)], close_fds=True)
         else:
-            subprocess.Popen(["xdg-open", str(p)], close_fds=True)
-    except OSError as e:
-        return str(e)
+            opener = shutil.which("xdg-open")
+            if not opener:
+                return (
+                    "Opening a folder isn’t available on this system (e.g. Streamlit Cloud or a phone). "
+                    "Use the **BINGE.xlsx** / **BINGE GRIDS.xlsx** download buttons."
+                )
+            subprocess.Popen([opener, str(p)], close_fds=True)
+    except OSError:
+        return (
+            "Couldn’t open the folder automatically. "
+            "On Streamlit Cloud or mobile, use the download buttons to save the files."
+        )
     return ""
 
 
@@ -659,7 +669,10 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
                     ):
                         err = _open_folder(nikki_path.parent)
                         if err:
-                            st.error(err)
+                            if "download buttons" in err:
+                                st.info(err)
+                            else:
+                                st.error(err)
                 with st.expander("Column headers (advanced)", expanded=False):
                     if sd.nikki_columns is not None:
                         st.json({k: v for k, v in asdict(sd.nikki_columns).items() if v is not None})
@@ -804,7 +817,10 @@ def _render_build_playlist(cfg, cfg_path: Path, nikki: Path) -> None:
         if st.button("Open folder", use_container_width=True):
             err = _open_folder(od)
             if err:
-                st.error(err)
+                if "download buttons" in err:
+                    st.info(err)
+                else:
+                    st.error(err)
             else:
                 st.toast(f"Opened: {od}")
 
