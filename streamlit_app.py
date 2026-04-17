@@ -406,15 +406,6 @@ def _render_top_nav() -> str:
     if st.session_state.get("main_nav_tabs") not in _MAIN_NAV_OPTIONS:
         st.session_state["main_nav_tabs"] = _NAV_BUILD
 
-    st.markdown(
-        '<h1 style="margin:0 0 0.5rem 0;font-size:1.35rem;font-weight:700;line-height:1.25;">'
-        "Build/edit schedules and view the content archive."
-        "</h1>"
-        '<p style="margin:0 0 0.75rem 0;font-size:0.85rem;opacity:0.8;">'
-        "Generate BINGE exports, browse the archive, then change sources and run **Create BINGE files** again."
-        "</p>",
-        unsafe_allow_html=True,
-    )
     nav_col, setup_col = st.columns([5, 1], vertical_alignment="center")
     with nav_col:
         if hasattr(st, "segmented_control"):
@@ -1514,15 +1505,6 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         for k in ("binge_path", "grids_path", "out_dir"):
             st.session_state.pop(k, None)
     st.session_state["_build_month_iso"] = cur_m
-
-    next_locked = None
-    if len(unlocked) < len(pipeline):
-        next_locked = pipeline[len(unlocked)]
-        st.caption(
-            f"Unlocked through **{unlocked[-1].strftime('%B %Y')}**. "
-            f"Next unlock: **{next_locked.strftime('%B %Y')}** after a successful build "
-            "(or reset `schedule_build_state.json` / legacy `playlist_build_state.json`)."
-        )
 
     st.markdown("##### Build options")
     min_day = parse_monday(buildable_weeks[0].monday)
