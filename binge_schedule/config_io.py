@@ -110,6 +110,7 @@ def _show_from_dict(key: str, d: dict[str, Any]) -> ShowDef:
             else None
         ),
         overnight_repeat_morning_weekdays=_morning_weekdays_from_yaml(d.get("overnight_repeat_morning_weekdays")),
+        repeat_previous_slot_when_unmapped=bool(d.get("repeat_previous_slot_when_unmapped", False)),
     )
 
 

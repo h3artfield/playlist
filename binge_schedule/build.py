@@ -76,7 +76,8 @@ def _episode_for_slot(
 
     Lookup is ``(show_key, weekday, slot)``. Missing entry means no reference rule for this show in this
     half-hour (e.g. different show occupied that slot in April, or programming changed)—use normal
-    **air-date** order via ``next_episode``.
+    **air-date** order via ``next_episode``, unless ``ShowDef.repeat_previous_slot_when_unmapped`` replays the
+    prior half-hour on the same day for that show.
     """
     if not episode_actions:
         ep = cat.next_episode(key, wrap=cfg.wrap_episodes)
@@ -84,7 +85,22 @@ def _episode_for_slot(
         return ep
 
     act = episode_actions.get((key, wd, slot))
-    if act is None or act == "advance":
+    if act is None:
+        sd0 = cfg.shows.get(key)
+        if (
+            sd0 is not None
+            and sd0.kind == "series"
+            and sd0.repeat_previous_slot_when_unmapped
+            and slot > 0
+        ):
+            prev_ep = emitted.get((key, wd, slot - 1))
+            if prev_ep is not None:
+                emitted[(key, wd, slot)] = prev_ep
+                return prev_ep
+        ep = cat.next_episode(key, wrap=cfg.wrap_episodes)
+        emitted[(key, wd, slot)] = ep
+        return ep
+    if act == "advance":
         ep = cat.next_episode(key, wrap=cfg.wrap_episodes)
         emitted[(key, wd, slot)] = ep
         return ep

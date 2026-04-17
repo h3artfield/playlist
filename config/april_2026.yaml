@@ -82,6 +82,9 @@ shows:
     kind: series
     nikki_sheet: "21 Jump Street"
     prefix: JMP
+    # April never advances twice in a row in the same clock run; May grids often duplicate a half-hour the
+    # reference BINGE did not encode → would advance every slot. Repeat previous half-hour when unmapped.
+    repeat_previous_slot_when_unmapped: true
   saint:
     display_name: "The Saint"
     kind: series

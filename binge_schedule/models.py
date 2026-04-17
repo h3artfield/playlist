@@ -77,6 +77,9 @@ class ShowDef:
     # If set: only patch **morning** rows on calendar day **D** when ``D.weekday()`` is in this set (Mon=0 … Sun=6).
     # Omit for all days. Example: exclude Sunday so Sun 0:00 is not treated as a repeat of Sat when Sat has no airings.
     overnight_repeat_morning_weekdays: Optional[tuple[int, ...]] = None
+    # If true: reference BINGE has no rule for this (weekday, slot) but grid still stacks this show on the prior
+    # half-hour — reuse that episode instead of advancing Nikki (fixes spurious back-to-back different eps).
+    repeat_previous_slot_when_unmapped: bool = False
 
 
 @dataclass
