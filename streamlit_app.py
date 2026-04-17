@@ -778,6 +778,27 @@ def _display_name_for_archive_pick(cfg, sel: str) -> str:
     return cfg.shows[sel].display_name
 
 
+def _grids_preview_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Show blank cells in the GRIDS preview instead of ``None`` / ``nan`` text."""
+
+    def _cell(v: Any) -> Any:
+        if v is None:
+            return ""
+        try:
+            if pd.isna(v):
+                return ""
+        except (TypeError, ValueError):
+            pass
+        if isinstance(v, str) and v.strip().lower() in ("none", "nan"):
+            return ""
+        return v
+
+    dfc = df.copy()
+    if hasattr(dfc, "map"):
+        return dfc.map(_cell)
+    return dfc.applymap(_cell)  # type: ignore[attr-defined]
+
+
 def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
     """In-page tables from the last generated BINGE / BINGE GRIDS in session (optional swap → archive)."""
     if "binge_path" not in st.session_state or "grids_path" not in st.session_state:
@@ -923,7 +944,7 @@ def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
             st.caption("Full sheet layout; program cells are typically rows 5–52, columns B–H (Mon–Sun).")
             max_r = min(len(grids_df), 52)
             st.dataframe(
-                grids_df.iloc[:max_r],
+                _grids_preview_dataframe(grids_df.iloc[:max_r]),
                 use_container_width=True,
                 height=340,
                 hide_index=True,
