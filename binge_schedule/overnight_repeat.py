@@ -1,12 +1,11 @@
 """Apply scheduling rule **A**: early morning repeats the previous calendar day's late fringe.
 
-- **Sunday → Monday** (``overnight_repeat_after: sunday``): Monday 0:00–4:00 replays the **last N** half-hours
-  from **Sunday 20:00–24:00** for that show (N = Monday early row count). The same structure **repeats** each ISO week.
-- **Thursday → Friday** (``overnight_repeat_after: thursday``): Friday 0:00–4:00 replays the **last N** rows from
-  **Thursday 20:00–24:00**.
+For each show with ``overnight_repeat_after: daily`` (or legacy ``sunday`` / ``thursday``, treated as ``daily``),
+each calendar day **D**: rows in **D** 0:00–4:00 match the **last N** episode codes from **D−1** 20:00–24:00
+(N = number of early rows). Examples: Sun→Mon, Tue→Wed (e.g. Hunter), Thu→Fri.
 
-Runs on the **combined** BINGE dataframe (all processed weeks, including warm-up) so Sunday and Monday can align
-across sheet boundaries. Nikki metadata for copied codes is filled from ``cat``.
+Runs on the **combined** BINGE dataframe (all processed weeks, including warm-up) so late/early align across ISO
+week boundaries. Nikki metadata for copied codes is filled from ``cat``.
 """
 
 from __future__ import annotations
@@ -23,6 +22,16 @@ from binge_schedule.show_resolve import resolve_show
 LATE_START = 20 * 60
 LATE_END = 24 * 60
 EARLY_END = 4 * 60
+
+
+def _overnight_repeat_mode(raw: Optional[str]) -> Optional[str]:
+    """``sunday`` / ``thursday`` are legacy aliases for the full prior-calendar-day rule (``daily``)."""
+    if raw is None or not str(raw).strip():
+        return None
+    s = str(raw).strip().lower()
+    if s in ("sunday", "thursday"):
+        return "daily"
+    return s
 
 
 def _mins_from_row(row: pd.Series, c_start: str) -> int:
@@ -92,15 +101,10 @@ def apply_overnight_repeats_combined(cfg: BuildConfig, cat: Catalog, df: pd.Data
     except KeyError:
         return out
 
-    sunday_keys = [
+    daily_keys = [
         k
         for k, sd in cfg.shows.items()
-        if sd.kind == "series" and (sd.overnight_repeat_after or "").strip().lower() == "sunday"
-    ]
-    thursday_keys = [
-        k
-        for k, sd in cfg.shows.items()
-        if sd.kind == "series" and (sd.overnight_repeat_after or "").strip().lower() == "thursday"
+        if sd.kind == "series" and _overnight_repeat_mode(sd.overnight_repeat_after) == "daily"
     ]
 
     dates = set()
@@ -112,64 +116,32 @@ def apply_overnight_repeats_combined(cfg: BuildConfig, cat: Catalog, df: pd.Data
 
     for d in sorted(dates):
         prev = d - timedelta(days=1)
-
-        # Sun → Mon
-        if d.weekday() == 0 and prev.weekday() == 6:
-            for key in sunday_keys:
-                late_idx = _indices_for(
-                    out, cfg, prev, key, LATE_START, LATE_END, c_date, c_start, c_show
-                )
-                early_idx = _indices_for(out, cfg, d, key, 0, EARLY_END, c_date, c_start, c_show)
-                if not early_idx or not late_idx:
+        for key in daily_keys:
+            late_idx = _indices_for(
+                out, cfg, prev, key, LATE_START, LATE_END, c_date, c_start, c_show
+            )
+            early_idx = _indices_for(out, cfg, d, key, 0, EARLY_END, c_date, c_start, c_show)
+            if not early_idx or not late_idx:
+                continue
+            late_codes = [
+                str(out.loc[ri, c_ep]).strip()
+                for ri, _ in late_idx
+                if pd.notna(out.loc[ri, c_ep]) and str(out.loc[ri, c_ep]).strip().upper() != "MOVIE"
+            ]
+            n = len(early_idx)
+            if len(late_codes) < n:
+                continue
+            take = late_codes[-n:]
+            for j, (ri, _) in enumerate(early_idx):
+                code = take[j]
+                ep_obj = _episode_for_code(cat, key, code)
+                if ep_obj is None:
+                    out.loc[ri, c_ep] = code
                     continue
-                late_codes = [
-                    str(out.loc[ri, c_ep]).strip()
-                    for ri, _ in late_idx
-                    if pd.notna(out.loc[ri, c_ep]) and str(out.loc[ri, c_ep]).strip().upper() != "MOVIE"
-                ]
-                n = len(early_idx)
-                if len(late_codes) < n:
-                    continue
-                take = late_codes[-n:]
-                for j, (ri, _) in enumerate(early_idx):
-                    code = take[j]
-                    ep_obj = _episode_for_code(cat, key, code)
-                    if ep_obj is None:
-                        out.loc[ri, c_ep] = code
-                        continue
-                    out.loc[ri, c_ep] = ep_obj.code
-                    out.loc[ri, c_enum] = ep_obj.episode_num
-                    if c_name is not None:
-                        out.loc[ri, c_name] = ep_obj.title
-
-        # Thu → Fri
-        if d.weekday() == 4 and prev.weekday() == 3:
-            for key in thursday_keys:
-                late_idx = _indices_for(
-                    out, cfg, prev, key, LATE_START, LATE_END, c_date, c_start, c_show
-                )
-                early_idx = _indices_for(out, cfg, d, key, 0, EARLY_END, c_date, c_start, c_show)
-                if not early_idx or not late_idx:
-                    continue
-                late_codes = [
-                    str(out.loc[ri, c_ep]).strip()
-                    for ri, _ in late_idx
-                    if pd.notna(out.loc[ri, c_ep]) and str(out.loc[ri, c_ep]).strip().upper() != "MOVIE"
-                ]
-                n = len(early_idx)
-                if len(late_codes) < n:
-                    continue
-                take = late_codes[-n:]
-                for j, (ri, _) in enumerate(early_idx):
-                    code = take[j]
-                    ep_obj = _episode_for_code(cat, key, code)
-                    if ep_obj is None:
-                        out.loc[ri, c_ep] = code
-                        continue
-                    out.loc[ri, c_ep] = ep_obj.code
-                    out.loc[ri, c_enum] = ep_obj.episode_num
-                    if c_name is not None:
-                        out.loc[ri, c_name] = ep_obj.title
+                out.loc[ri, c_ep] = ep_obj.code
+                out.loc[ri, c_enum] = ep_obj.episode_num
+                if c_name is not None:
+                    out.loc[ri, c_name] = ep_obj.title
 
     return out
 

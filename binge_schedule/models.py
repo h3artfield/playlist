@@ -68,8 +68,8 @@ class ShowDef:
     # Example: Carol Burnett tab uses green fill on playable episodes — use ``green_episode_cell``.
     nikki_row_filter: Optional[str] = None
     # Early morning repeats the **tail** of the prior calendar day's late fringe (see ``overnight_repeat``).
-    # ``sunday`` → Monday 0:00–4:00 repeats Sunday 20:00–24:00 (last N slots). ``thursday`` → Friday 0:00–4:00
-    # repeats Thursday 20:00–24:00. Weeks repeat the same pattern ISO week to ISO week.
+    # ``daily`` (or legacy ``sunday`` / ``thursday``): for each calendar day D, D's 0:00–4:00 repeats the last N
+    # slots of (D−1)'s 20:00–24:00 for that show (e.g. Tue 20:00–24:00 → Wed 0:00–4:00). N = number of early rows.
     overnight_repeat_after: Optional[str] = None
 
 
