@@ -401,7 +401,7 @@ def _render_top_nav() -> str:
 
     st.markdown(
         '<h1 style="margin:0 0 0.5rem 0;font-size:1.35rem;font-weight:700;line-height:1.25;">'
-        "Build schedule, view content archive, and edit schedules."
+        "Build/edit schedules and view the content archive."
         "</h1>"
         '<p style="margin:0 0 0.75rem 0;font-size:0.85rem;opacity:0.8;">'
         "Generate BINGE exports, browse the archive, then change sources and run **Create BINGE files** again."
