@@ -26,8 +26,8 @@ import streamlit as st
 
 from binge_schedule import nikki
 from binge_schedule.archive_normalize import normalize_episodes_for_archive
-from binge_schedule.config_io import load_build_config
 from binge_schedule.binge_overrides import BingeRowOverride, parse_flexible_time
+from binge_schedule.config_io import load_build_config
 from binge_schedule.models import NikkiColumnHeaders, ShowDef
 from binge_schedule.cursor_state import resolved_cursor_state_path, resolved_nikki_workbook_path
 from binge_schedule.binge_to_grid import normalize_binge_df_columns
@@ -779,33 +779,6 @@ def _unlocked_months(pipeline: list[date], completed: set[str]) -> list[date]:
     return out
 
 
-def _default_unlocked_month_index(unlocked: list[date], completed: set[str]) -> int:
-    """Prefer the next month not yet completed; otherwise the latest unlocked."""
-    if not unlocked:
-        return 0
-    for i, m in enumerate(unlocked):
-        if _month_key(m) not in completed:
-            return i
-    return len(unlocked) - 1
-
-
-def _coerce_schedule_month_session(unlocked: list[date], completed: set[str]) -> None:
-    """Align ``schedule_month`` with the active chain (drop stale e.g. June when May is still next)."""
-    if not unlocked:
-        return
-    key = "schedule_month"
-    default_idx = _default_unlocked_month_index(unlocked, completed)
-    want = unlocked[default_idx]
-    cur = st.session_state.get(key)
-    if cur is None:
-        return
-    if cur not in unlocked:
-        st.session_state[key] = want
-        return
-    if unlocked.index(cur) > default_idx:
-        st.session_state[key] = want
-
-
 def _sorted_weeks(weeks: list) -> list:
     return sorted(weeks, key=lambda w: parse_monday(w.monday))
 
@@ -849,7 +822,7 @@ def _schedule_template_slots(weeks: list) -> tuple[list[dict[str, Any]], list[st
         try:
             grid = load_grid_sheet(w.grids_file, w.sheet_name)
         except Exception as e:  # noqa: BLE001
-            warnings.append(f"Could not load template grid `{w.sheet_name}` in `{Path(w.grids_file).name}`: {e}")
+            warnings.append(f"Could not load grid `{w.sheet_name}` in `{Path(w.grids_file).name}`: {e}")
             continue
         dates = day_dates(mon)
         for day_idx in range(7):
@@ -880,7 +853,6 @@ def _schedule_template_slots(weeks: list) -> tuple[list[dict[str, Any]], list[st
                         "duration_minutes": minutes,
                         "duration_label": _format_duration_minutes(minutes),
                         "show": show_text,
-                        "sheet_name": w.sheet_name,
                     }
                 )
     slots.sort(key=lambda r: (r["date_iso"], r["start_slot"], r["show"].casefold()))
@@ -1589,27 +1561,6 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     template_slots, template_warnings = _schedule_template_slots(selected_weeks)
     for wmsg in template_warnings:
         st.warning(wmsg)
-    if not template_slots:
-        st.warning("No schedule blocks were found in the selected weeks' grids.")
-        return
-
-    st.markdown("##### Interactive weekly template")
-    st.caption(
-        "Pick existing schedule blocks, then choose replacement programs. "
-        "This editor uses grids blocks and applies date/start anchors for deterministic updates."
-    )
-    template_df = pd.DataFrame(
-        {
-            "Date": [r["date_iso"] for r in template_slots],
-            "Start": [r["start"] for r in template_slots],
-            "Finish": [r["finish"] for r in template_slots],
-            "Duration": [r["duration_label"] for r in template_slots],
-            "Show": [r["show"] for r in template_slots],
-            "Week Monday": [r["week_monday"] for r in template_slots],
-        }
-    )
-    st.dataframe(template_df, use_container_width=True, height=280, hide_index=True)
-
     slot_by_id = {r["slot_id"]: r for r in template_slots}
     slot_ids = [r["slot_id"] for r in template_slots]
 
@@ -1627,111 +1578,106 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
             return f"{tab} _(not on schedule)_"
         return cfg.shows[opt].display_name
 
+    st.markdown("##### Optional schedule changes")
+    st.caption("Template table is hidden, but OTO/mass controls are still available for the selected weeks.")
     use_oto = st.checkbox(
-        "Add OTO (one-time-only) changes for this run only",
+        "Apply OTO (one-time-only) changes for this output",
         key="build_use_oto_changes",
     )
     oto_rows: list[dict[str, Any]] = []
     oto_pick: Optional[str] = None
     if use_oto:
-        oto_ids = st.multiselect(
-            "OTO: select schedule blocks",
-            slot_ids,
-            format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
-            key="build_oto_slot_ids",
-        )
-        oto_rows = [slot_by_id[sid] for sid in oto_ids if sid in slot_by_id]
-        if archive_options:
-            oto_pick = st.selectbox(
-                "OTO replacement show",
-                archive_options,
-                format_func=_archive_pick_label,
-                key="build_oto_pick",
+        if not slot_ids:
+            st.warning("No editable schedule blocks found in the selected weeks.")
+        else:
+            oto_ids = st.multiselect(
+                "OTO: choose schedule blocks",
+                slot_ids,
+                format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
+                key="build_oto_slot_ids",
             )
-        if oto_rows:
-            dur = sum(int(r["duration_minutes"]) for r in oto_rows)
-            st.caption(f"OTO selected duration to fill: **{_format_duration_minutes(dur)}**")
+            oto_rows = [slot_by_id[sid] for sid in oto_ids if sid in slot_by_id]
+            if archive_options:
+                oto_pick = st.selectbox(
+                    "OTO replacement show",
+                    archive_options,
+                    format_func=_archive_pick_label,
+                    key="build_oto_pick",
+                )
 
     use_mass = st.checkbox(
-        "Add mass changes and persist them to source schedule files",
+        "Apply mass changes and persist to source schedule files",
         key="build_use_mass_changes",
     )
     mass_rows: list[dict[str, Any]] = []
     mass_pick: Optional[str] = None
     if use_mass:
-        base_ids = st.multiselect(
-            "Mass: select seed blocks",
-            slot_ids,
-            format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
-            key="build_mass_seed_ids",
-        )
-        expand_pattern = st.checkbox(
-            "Expand seeds across selected weeks (same weekday + start slot + current show)",
-            value=True,
-            key="build_mass_expand_pattern",
-        )
-        if expand_pattern and base_ids:
-            expanded: set[str] = set()
-            for sid in base_ids:
-                src = slot_by_id.get(sid)
-                if not src:
-                    continue
-                for row in template_slots:
-                    if (
-                        row["day_index"] == src["day_index"]
-                        and row["start_slot"] == src["start_slot"]
-                        and row["show"].casefold() == src["show"].casefold()
-                    ):
-                        expanded.add(row["slot_id"])
-            mass_rows = [slot_by_id[sid] for sid in sorted(expanded)]
-            st.caption(f"Pattern expansion selected **{len(mass_rows)}** blocks.")
+        if not slot_ids:
+            st.warning("No editable schedule blocks found in the selected weeks.")
         else:
-            mass_rows = [slot_by_id[sid] for sid in base_ids if sid in slot_by_id]
-        if archive_options:
-            mass_pick = st.selectbox(
-                "Mass replacement show",
-                archive_options,
-                format_func=_archive_pick_label,
-                key="build_mass_pick",
+            base_ids = st.multiselect(
+                "Mass: choose seed blocks",
+                slot_ids,
+                format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
+                key="build_mass_seed_ids",
             )
-        if mass_rows:
-            dur = sum(int(r["duration_minutes"]) for r in mass_rows)
-            st.caption(f"Mass selected duration to fill: **{_format_duration_minutes(dur)}**")
-        st.warning(
-            "Mass changes write into your source grids/setup and affect future builds."
-        )
-
-    if use_mass:
-        st.checkbox(
-            "I understand mass changes persist to source files.",
-            key="build_mass_confirm",
-        )
+            expand_pattern = st.checkbox(
+                "Expand by pattern (same weekday + start slot + current show)",
+                value=True,
+                key="build_mass_expand_pattern",
+            )
+            if expand_pattern and base_ids:
+                expanded: set[str] = set()
+                for sid in base_ids:
+                    src = slot_by_id.get(sid)
+                    if not src:
+                        continue
+                    for row in template_slots:
+                        if (
+                            row["day_index"] == src["day_index"]
+                            and row["start_slot"] == src["start_slot"]
+                            and row["show"].casefold() == src["show"].casefold()
+                        ):
+                            expanded.add(row["slot_id"])
+                mass_rows = [slot_by_id[sid] for sid in sorted(expanded)]
+            else:
+                mass_rows = [slot_by_id[sid] for sid in base_ids if sid in slot_by_id]
+            if archive_options:
+                mass_pick = st.selectbox(
+                    "Mass replacement show",
+                    archive_options,
+                    format_func=_archive_pick_label,
+                    key="build_mass_pick",
+                )
+            st.checkbox(
+                "I understand mass changes persist to source files.",
+                key="build_mass_confirm",
+            )
 
     st.markdown("##### Preview changes")
-    st.caption(
-        "Quick preflight before export: OTO changes affect only this output; mass changes update source files for future runs."
+    st.caption("This run uses the selected start date/week count, plus optional OTO/mass changes below.")
+    st.markdown(
+        "\n".join(
+            [
+                f"- Build window: **{start_date.isoformat()}** + **{len(selected_weeks)}** week(s)",
+                f"- Weeks: {', '.join(f'`{w.monday}`' for w in selected_weeks)}",
+            ]
+        )
     )
-    preview_lines = [
-        f"- Build window: **{start_date.isoformat()}** + **{len(selected_weeks)}** week(s)",
-        f"- Weeks: {', '.join(f'`{w.monday}`' for w in selected_weeks)}",
-    ]
     if use_oto:
         oto_dur = _format_duration_minutes(sum(int(r["duration_minutes"]) for r in oto_rows)) if oto_rows else "0m"
         oto_name = _display_name_for_archive_pick(cfg, oto_pick) if oto_pick else "—"
-        preview_lines.append(
-            f"- OTO: **{len(oto_rows)}** block(s), duration **{oto_dur}**, replacement **{oto_name}** (output-only)"
-        )
+        st.markdown(f"- OTO: **{len(oto_rows)}** block(s), duration **{oto_dur}**, replacement **{oto_name}**")
     else:
-        preview_lines.append("- OTO: none")
+        st.markdown("- OTO: none")
     if use_mass:
         mass_dur = _format_duration_minutes(sum(int(r["duration_minutes"]) for r in mass_rows)) if mass_rows else "0m"
         mass_name = _display_name_for_archive_pick(cfg, mass_pick) if mass_pick else "—"
-        preview_lines.append(
-            f"- Mass: **{len(mass_rows)}** block(s), duration **{mass_dur}**, replacement **{mass_name}** (persists to source)"
+        st.markdown(
+            f"- Mass: **{len(mass_rows)}** block(s), duration **{mass_dur}**, replacement **{mass_name}** (persists)"
         )
     else:
-        preview_lines.append("- Mass: none")
-    st.markdown("\n".join(preview_lines))
+        st.markdown("- Mass: none")
 
     preflight_issues: list[str] = []
     if use_oto and (not oto_rows or not oto_pick):
