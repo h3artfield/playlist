@@ -782,6 +782,23 @@ def _default_unlocked_month_index(unlocked: list[date], completed: set[str]) -> 
     return len(unlocked) - 1
 
 
+def _coerce_schedule_month_session(unlocked: list[date], completed: set[str]) -> None:
+    """Align ``schedule_month`` with the active chain (drop stale e.g. June when May is still next)."""
+    if not unlocked:
+        return
+    key = "schedule_month"
+    default_idx = _default_unlocked_month_index(unlocked, completed)
+    want = unlocked[default_idx]
+    cur = st.session_state.get(key)
+    if cur is None:
+        return
+    if cur not in unlocked:
+        st.session_state[key] = want
+        return
+    if unlocked.index(cur) > default_idx:
+        st.session_state[key] = want
+
+
 def _list_xlsx_sheet_names(path: Path) -> list[str]:
     import openpyxl
 
@@ -1364,6 +1381,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     if len(unlocked) < len(pipeline):
         next_locked = pipeline[len(unlocked)]
 
+    _coerce_schedule_month_session(unlocked, completed)
     month_start = st.selectbox(
         "Build this month",
         unlocked,
