@@ -31,7 +31,7 @@ reference_binge_literal_copy_before: "2026-05-04"
 # this path (e.g. archive May build, rerun May replaces the file).
 # save_binge_reference_copy_to: "../data/MAY 2026 BINGE.xlsx"
 # First month in the app’s **Build this month** chain (dropdown omits earlier months). After a successful build,
-# the next calendar month in ``weeks`` unlocks. Resets: delete ``playlist_build_state.json`` next to this file.
+# the next calendar month in ``weeks`` unlocks. Resets: delete ``schedule_build_state.json`` (or legacy ``playlist_build_state.json``) next to this file.
 build_sequence_start: "2026-05-01"
 
 shows:

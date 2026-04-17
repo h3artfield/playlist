@@ -1,4 +1,4 @@
-"""Discover content-workbook tabs for the archive UI (playlist entries + Excel tabs not on the playlist yet)."""
+"""Discover content-workbook tabs for the archive UI (schedule entries + Excel tabs not on the schedule yet)."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def series_nikki_sheets_used(cfg: BuildConfig) -> set[str]:
 
 
 def workbook_tabs_not_in_yaml(cfg: BuildConfig, sheet_names: tuple[str, ...]) -> list[str]:
-    """Excel tabs to list for browsing: not the ``movies`` catalog and not already used as a playlist series tab."""
+    """Excel tabs to list for browsing: not the ``movies`` catalog and not already used as a schedule series tab."""
     used = series_nikki_sheets_used(cfg)
     out: list[str] = []
     for s in sheet_names:
@@ -42,7 +42,7 @@ def parse_workbook_tab_option(opt: str) -> str | None:
 
 
 def synthetic_series_for_tab(sheet_name: str) -> ShowDef:
-    """Minimal ``ShowDef`` for browsing an Excel tab that is not on the playlist setup yet."""
+    """Minimal ``ShowDef`` for browsing an Excel tab that is not on the schedule setup yet."""
     pfx = _guess_prefix(sheet_name)
     slug = re.sub(r"[^a-zA-Z0-9]+", "_", sheet_name).strip("_").lower()[:50] or "tab"
     return ShowDef(

@@ -8,7 +8,7 @@ You connect **GitHub** once; Streamlit hosts the app and gives you a **`.streaml
 2. From your machine (with [Git](https://git-scm.com/) installed):
 
    ```bash
-   cd path/to/playlist
+   cd path/to/your-repo
    git init
    git add binge_schedule config streamlit_app.py main.py requirements.txt Run_UI.bat README_FOR_OTHER_PC.txt .gitignore .streamlit config/cloud.yaml DEPLOY_STREAMLIT.md
    git commit -m "Initial commit: BINGE UI"

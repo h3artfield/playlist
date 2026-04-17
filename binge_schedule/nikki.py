@@ -281,7 +281,7 @@ def _rgb_string_from_openpyxl_color(color) -> Optional[str]:
     return str(rgb).upper()
 
 
-def _is_playlist_green_fill(fill) -> bool:
+def _is_schedule_green_fill(fill) -> bool:
     """True when the Episode cell uses the same green fill as playable Carol rows."""
     if fill is None or fill.fill_type is None:
         return False
@@ -329,7 +329,7 @@ def _green_episode_row_indices(
         ws = wb[sheet_name]
         for i in range(header_row + 1, n_df_rows):
             c = ws.cell(row=i + 1, column=ep_col + 1)
-            if _is_playlist_green_fill(c.fill):
+            if _is_schedule_green_fill(c.fill):
                 out.add(i)
         return out
     finally:

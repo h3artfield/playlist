@@ -1,4 +1,4 @@
-"""Apply playlist show swaps to grids workbooks and setup YAML (and cursors when adding a new show)."""
+"""Apply schedule show swaps to grids workbooks and setup YAML (and cursors when adding a new show)."""
 
 from __future__ import annotations
 
@@ -264,7 +264,7 @@ def apply_show_swap(
 
     Without an anchor, every matching cell in all weeks is updated (legacy bulk behavior).
 
-    If **archive_pick** is a workbook tab not yet on the playlist, append a **shows:** entry to the YAML
+    If **archive_pick** is a workbook tab not yet on the schedule, append a **shows:** entry to the YAML
     and seed the cursor file for that key.
 
     Does not edit the Nikki ``.xlsx`` binary; new series use existing tabs via ``nikki_sheet`` in YAML.

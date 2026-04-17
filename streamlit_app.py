@@ -1,5 +1,5 @@
 """
-Playlist Builder — Streamlit UI to build BINGE exports, browse the content archive, and edit playlist sources.
+Schedule Builder — Streamlit UI to build BINGE exports, browse the content archive, and edit schedule sources.
 
 Run from the project directory:
   streamlit run streamlit_app.py
@@ -357,15 +357,17 @@ def _mobile_styles() -> None:
     )
 
 
-_NAV_BUILD = "Build playlist"
+_NAV_BUILD = "Build schedule"
 _NAV_ARCHIVE = "View content archive"
-_NAV_EDIT_PLAYLIST = "Edit playlists"
-_MAIN_NAV_OPTIONS = (_NAV_BUILD, _NAV_ARCHIVE, _NAV_EDIT_PLAYLIST)
+_NAV_EDIT_SCHEDULE = "Edit schedules"
+_MAIN_NAV_OPTIONS = (_NAV_BUILD, _NAV_ARCHIVE, _NAV_EDIT_SCHEDULE)
 _LEGACY_MAIN_NAV_TAB: dict[str, str] = {
     "Build": _NAV_BUILD,
+    "Build playlist": _NAV_BUILD,
     "Content archive": _NAV_ARCHIVE,
-    "Playlist": _NAV_EDIT_PLAYLIST,
-    "Edit playlist": _NAV_EDIT_PLAYLIST,
+    "Playlist": _NAV_EDIT_SCHEDULE,
+    "Edit playlist": _NAV_EDIT_SCHEDULE,
+    "Edit playlists": _NAV_EDIT_SCHEDULE,
 }
 # Must not assign to ``main_nav_tabs`` after the segmented control renders — use ``main_nav_pending`` + rerun instead.
 _MAIN_NAV_PENDING_KEY = "main_nav_pending"
@@ -399,7 +401,7 @@ def _render_top_nav() -> str:
 
     st.markdown(
         '<h1 style="margin:0 0 0.5rem 0;font-size:1.35rem;font-weight:700;line-height:1.25;">'
-        "Build playlist, view content archive, and edit playlists."
+        "Build schedule, view content archive, and edit schedules."
         "</h1>"
         '<p style="margin:0 0 0.75rem 0;font-size:0.85rem;opacity:0.8;">'
         "Generate BINGE exports, browse the archive, then change sources and run **Create BINGE files** again."
@@ -431,7 +433,7 @@ def _render_top_nav() -> str:
         if hasattr(st, "popover"):
             with st.popover("Setup", use_container_width=True):
                 st.text_input(
-                    "Playlist setup (YAML)",
+                    "Schedule setup (YAML)",
                     key="main_setup_yaml",
                     placeholder="config/april_2026.yaml",
                 )
@@ -506,7 +508,7 @@ def _render_archive_episode_browser(
     st.markdown("### Episodes")
     if browse_only:
         st.caption(
-            "Browse only — not on the playlist until you add this tab under **`nikki_sheet`** in your setup. "
+            "Browse only — not on the schedule until you add this tab under **`nikki_sheet`** in your setup. "
             "**Create BINGE files** skips it until then."
         )
     if sd.nikki_row_filter == nikki.ROW_FILTER_GREEN_EPISODE_CELL:
@@ -558,8 +560,8 @@ def _render_archive_episode_browser(
         return
 
     st.caption(
-        f"**{len(rows)}** rows — playlist **#** column matches **Create BINGE files**"
-        + (" (when on the playlist)." if not browse_only else " (browse only until added to setup).")
+        f"**{len(rows)}** rows — schedule **#** column matches **Create BINGE files**"
+        + (" (when on the schedule)." if not browse_only else " (browse only until added to setup).")
         + " Click a row for detail."
     )
 
@@ -609,7 +611,7 @@ def _render_archive_episode_browser(
 
     disp = pd.DataFrame(
         {
-            "#": [r["playlist_num"] for r in filtered],
+            "#": [r["schedule_num"] for r in filtered],
             "S×E": [r["se_compact"] for r in filtered],
             "Season": [("—" if r["season"] is None else str(r["season"])) for r in filtered],
             "Ep": [("—" if r["ep_in_season"] is None else str(r["ep_in_season"])) for r in filtered],
@@ -651,7 +653,7 @@ def _render_archive_episode_browser(
             one = filtered[picked_idx]
             sr1, sr2 = st.columns(2)
             with sr1:
-                st.metric("Playlist #", str(one["playlist_num"]))
+                st.metric("Schedule #", str(one["schedule_num"]))
                 st.metric("Code", one["code"] or "—")
             with sr2:
                 st.metric("S×E (normalized)", one["se_compact"])
@@ -671,13 +673,13 @@ def _render_archive_episode_browser(
             "Pick a row (fallback)",
             list(range(len(filtered))),
             format_func=lambda i: (
-                f"#{filtered[i]['playlist_num']}  {filtered[i]['se_compact']}  {filtered[i]['code']}  —  "
+                f"#{filtered[i]['schedule_num']}  {filtered[i]['se_compact']}  {filtered[i]['code']}  —  "
                 f"{str(filtered[i]['title'])[:160]}"
             ),
             key=f"archive_jump_{_archive_wkey(sel)}",
         )
         one = filtered[int(ix)]
-        st.metric("Playlist #", str(one["playlist_num"]))
+        st.metric("Schedule #", str(one["schedule_num"]))
         st.metric("S×E", one["se_compact"])
         raw = str(one["raw_cell"])
         st.caption("Normalized **Episode** cell")
@@ -689,24 +691,33 @@ def _month_key(m: date) -> str:
 
 
 def _build_state_path(cfg_path: Path) -> Path:
+    return cfg_path.resolve().parent / "schedule_build_state.json"
+
+
+def _legacy_build_state_path(cfg_path: Path) -> Path:
     return cfg_path.resolve().parent / "playlist_build_state.json"
 
 
-def _load_completed_months(cfg_path: Path) -> set[str]:
-    p = _build_state_path(cfg_path)
-    resolved = str(cfg_path.resolve())
-    if not p.is_file():
+def _completed_months_from_file(path: Path, config_resolved: str) -> set[str]:
+    if not path.is_file():
         return set()
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return set()
-    if data.get("config_resolved") != resolved:
+    if data.get("config_resolved") != config_resolved:
         return set()
     cm = data.get("completed_months")
     if not isinstance(cm, list):
         return set()
     return {str(x) for x in cm if x}
+
+
+def _load_completed_months(cfg_path: Path) -> set[str]:
+    resolved = str(cfg_path.resolve())
+    return _completed_months_from_file(_build_state_path(cfg_path), resolved) | _completed_months_from_file(
+        _legacy_build_state_path(cfg_path), resolved
+    )
 
 
 def _record_completed_month(cfg_path: Path, month_start: date) -> None:
@@ -943,7 +954,7 @@ def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
             st.info(
                 "**After the BINGE build:** select the **row** you’re replacing, then **Swap for…** and pick **whatever show** "
                 "you want from the archive. **Time and day stay the same** — only the program in that slot changes in your **grids** "
-                "(and the setup file if the show is new). Run **Create BINGE files** again on **Build playlist** so the spreadsheet matches."
+                "(and the setup file if the show is new). Run **Create BINGE files** again on **Build schedule** so the spreadsheet matches."
             )
             st.caption("One row → **Swap for… → View content archive** → confirm.")
             if picked_row_idx is not None:
@@ -1040,7 +1051,7 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
     def _archive_option_label(opt: str) -> str:
         tab = parse_workbook_tab_option(opt)
         if tab is not None:
-            return f"{tab} _(not in playlist)_"
+            return f"{tab} _(not on schedule)_"
         return cfg.shows[opt].display_name
 
     sel = st.selectbox(
@@ -1088,7 +1099,7 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
                         "auto_export_ok": auto_ok,
                     }
                     st.session_state.pop("swap_context", None)
-                    st.session_state[_MAIN_NAV_PENDING_KEY] = _NAV_EDIT_PLAYLIST
+                    st.session_state[_MAIN_NAV_PENDING_KEY] = _NAV_EDIT_SCHEDULE
                     st.rerun()
                 else:
                     for m in swap_msgs:
@@ -1103,9 +1114,9 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
 
     tab_only = parse_workbook_tab_option(sel)
     if tab_only is not None:
-        st.caption(f"Excel tab `{tab_only}` — **not in playlist**")
+        st.caption(f"Excel tab `{tab_only}` — **not on schedule**")
     else:
-        st.caption(f"Playlist entry `{sel}`")
+        st.caption(f"Schedule entry `{sel}`")
 
     browse_only = tab_only is not None
     sd = synthetic_series_for_tab(tab_only) if browse_only else cfg.shows[sel]
@@ -1113,7 +1124,7 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
         st.markdown(f"## {sd.display_name}")
         if browse_only:
             st.caption(
-                "Browse only — add this show to your **setup file** on the playlist (with the same **`nikki_sheet`** "
+                "Browse only — add this show to your **setup file** on the schedule (with the same **`nikki_sheet`** "
                 "name as this tab) so **Create BINGE files** can use it."
             )
         else:
@@ -1178,7 +1189,7 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
                         st.code(sd.nikki_row_filter, language=None)
                         if sd.nikki_row_filter == nikki.ROW_FILTER_GREEN_EPISODE_CELL:
                             st.caption(
-                                "Only green-filled **Episode** cells count for the playlist; **Create BINGE files** "
+                                "Only green-filled **Episode** cells count for the schedule; **Create BINGE files** "
                                 "uses the same rule, and this table matches it."
                             )
                     else:
@@ -1188,7 +1199,7 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
             st.metric("Kind", "Literal")
             st.caption(
                 "To swap a literal slot, edit the grid Excel for that week or change how the cell text "
-                "maps to **display_name** in your setup—use **Build playlist** to confirm names match."
+                "maps to **display_name** in your setup—use **Build schedule** to confirm names match."
             )
 
 
@@ -1241,7 +1252,7 @@ def _render_last_build_outputs(cfg, cfg_path: Path) -> None:
         st.caption(f"Wrap when a show runs out: **{cfg.wrap_episodes}**")
 
 
-def _render_playlist_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
+def _render_schedule_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
     sr = st.session_state.get("swap_result")
     if sr:
         if sr.get("auto_export_ok"):
@@ -1252,44 +1263,47 @@ def _render_playlist_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
         elif sr.get("auto_export_ok") is False:
             st.success(
                 f"**Grids updated** for that slot: **{', '.join(sr['old_show_labels'])}** → **{sr['new_display']}** "
-                f"(`{sr['archive_pick']}`). **BINGE export** did not run automatically — use **Create BINGE files** on **Build playlist**, "
+                f"(`{sr['archive_pick']}`). **BINGE export** did not run automatically — use **Create BINGE files** on **Build schedule**, "
                 "or see *What changed* for details."
             )
         else:
             st.success(
                 f"**Grids updated** for that slot: **{', '.join(sr['old_show_labels'])}** → **{sr['new_display']}** "
-                f"(`{sr['archive_pick']}`). Run **Create BINGE files** on **Build playlist** to refresh **BINGE.xlsx**."
+                f"(`{sr['archive_pick']}`). Run **Create BINGE files** on **Build schedule** to refresh **BINGE.xlsx**."
             )
         msgs = sr.get("messages") or []
         if msgs:
             with st.expander("What changed", expanded=True):
                 for m in msgs:
                     st.markdown(f"- {m}")
-        if st.button("Dismiss note", key="playlist_dismiss_swap"):
+        if st.button("Dismiss note", key="schedule_dismiss_swap"):
             st.session_state.pop("swap_result", None)
             st.rerun()
         st.divider()
 
     st.markdown(
-        "Your latest export is here and on **Build playlist**. Below: pick the **BINGE row** to replace, then choose the **archive** show — "
+        "Your latest export is here and on **Build schedule**. Below: pick the **BINGE row** to replace, then choose the **archive** show — "
         "**clock times stay put**; grids update for the next build."
     )
     completed = _load_completed_months(cfg_path)
     if completed:
-        st.caption(f"Months marked built in-app: **{', '.join(sorted(completed))}** (see `playlist_build_state.json`).")
+        st.caption(
+            f"Months marked built in-app: **{', '.join(sorted(completed))}** "
+            f"(see `schedule_build_state.json` or legacy `playlist_build_state.json`)."
+        )
 
     if "binge_path" not in st.session_state:
-        st.info("Nothing generated yet — go to **Build playlist** and run **Create BINGE files**.")
+        st.info("Nothing generated yet — go to **Build schedule** and run **Create BINGE files**.")
     else:
         st.markdown("##### Latest files")
         _render_last_build_outputs(cfg, cfg_path)
-        _render_binge_grids_preview(key_prefix="playlist", show_swap=True)
+        _render_binge_grids_preview(key_prefix="schedule", show_swap=True)
 
     st.divider()
     st.markdown("##### Make changes")
     st.caption(
-        "**Edit playlists** in your sources: episodes, order, and show keys live in the setup YAML and Nikki spreadsheet — "
-        "not only inside the export files. Edit those, then run **Create BINGE files** again on **Build playlist**."
+        "**Edit schedules** in your sources: episodes, order, and show keys live in the setup YAML and Nikki spreadsheet — "
+        "not only inside the export files. Edit those, then run **Create BINGE files** again on **Build schedule**."
     )
     setup_abs = cfg_path.resolve()
     st.markdown(f"- **Setup (YAML):** `{setup_abs}`")
@@ -1316,7 +1330,7 @@ def _render_playlist_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
             st.caption("Nikki path missing — fix **nikki_workbook** in the setup file.")
 
 
-def _render_build_playlist(cfg, cfg_path: Path, nikki: Path) -> None:
+def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     if not nikki.is_file():
         st.error(
             f"Spreadsheet file not found:\n`{nikki}`\n\n"
@@ -1355,7 +1369,7 @@ def _render_build_playlist(cfg, cfg_path: Path, nikki: Path) -> None:
         unlocked,
         index=_default_unlocked_month_index(unlocked, completed),
         format_func=lambda d: d.strftime("%B %Y"),
-        key="playlist_month",
+        key="schedule_month",
     )
     prev_m = st.session_state.get("_build_month_iso")
     cur_m = month_start.isoformat()
@@ -1367,7 +1381,7 @@ def _render_build_playlist(cfg, cfg_path: Path, nikki: Path) -> None:
     if next_locked is not None:
         st.caption(
             f"**{next_locked.strftime('%B %Y')}** unlocks after you run **Create BINGE files** successfully for "
-            f"**{unlocked[-1].strftime('%B %Y')}** (or delete `playlist_build_state.json` next to your setup to reset)."
+            f"**{unlocked[-1].strftime('%B %Y')}** (or delete `schedule_build_state.json` / legacy `playlist_build_state.json` next to your setup to reset)."
         )
 
     selected_weeks = _weeks_in_month(cfg.weeks, month_start)
@@ -1452,7 +1466,7 @@ def _render_build_playlist(cfg, cfg_path: Path, nikki: Path) -> None:
 
 def main() -> None:
     st.set_page_config(
-        page_title="Playlist Builder",
+        page_title="Schedule Builder",
         layout="centered",
         initial_sidebar_state="collapsed",
     )
@@ -1473,12 +1487,12 @@ def main() -> None:
     if page == _NAV_ARCHIVE:
         st.header(_NAV_ARCHIVE)
         _render_content_archive(cfg, cfg_path, nikki_path)
-    elif page == _NAV_EDIT_PLAYLIST:
-        st.header(_NAV_EDIT_PLAYLIST)
-        _render_playlist_tab(cfg, cfg_path, nikki_path)
+    elif page == _NAV_EDIT_SCHEDULE:
+        st.header(_NAV_EDIT_SCHEDULE)
+        _render_schedule_tab(cfg, cfg_path, nikki_path)
     else:
         st.header(_NAV_BUILD)
-        _render_build_playlist(cfg, cfg_path, nikki_path)
+        _render_build_schedule(cfg, cfg_path, nikki_path)
 
 
 if __name__ == "__main__":

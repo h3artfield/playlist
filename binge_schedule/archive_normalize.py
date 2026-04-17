@@ -56,7 +56,7 @@ def _se_compact(idx0: int, season: Optional[int], ep_in_season: Optional[int]) -
 
 
 def normalize_episodes_for_archive(episodes: list[Episode], style: str) -> list[dict[str, Any]]:
-    """Return one JSON-friendly dict per row: same order as ``nikki.load_sheet`` (playlist order)."""
+    """Return one JSON-friendly dict per row: same order as ``nikki.load_sheet`` (schedule order)."""
     out: list[dict[str, Any]] = []
     for i, ep in enumerate(episodes):
         season, ep_in_season = season_episode_parts(ep, style)
@@ -67,7 +67,7 @@ def normalize_episodes_for_archive(episodes: list[Episode], style: str) -> list[
         out.append(
             {
                 "idx0": i,
-                "playlist_num": i + 1,
+                "schedule_num": i + 1,
                 "code": code,
                 "title": title,
                 "season": season,

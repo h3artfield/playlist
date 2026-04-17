@@ -127,12 +127,12 @@ def rows_for_week(
     """Turn one week’s **grids** program into BINGE rows.
 
     The grids workbook does **not** carry Nikki episode codes; it only lists *what* airs *when* (show titles,
-    literals). **Episode code, episode #, and episode name** come from the Nikki workbook in playlist order.
+    literals). **Episode code, episode #, and episode name** come from the Nikki workbook in schedule order.
 
     If ``episode_actions`` is set (from ``reference_binge_file``), each scheduled slot for a **given show** follows
     that show’s April pattern: **advance** on the first time an ``EPISODE`` code appears that week for that
     show; **repeat** replays that Nikki episode when the same code appears again. If April had a **different**
-    show in that clock slot, there is no pattern for your show there—only **playlist / air order** (``next_episode``).
+    show in that clock slot, there is no pattern for your show there—only **schedule / air order** (``next_episode``).
     **30-minute** series (default): one BINGE row per half-hour. **60** / **120** ``binge_row_minutes`` merge grid
     half-hours into one row per episode block (April template); reference BINGE typos do not override YAML.
     """

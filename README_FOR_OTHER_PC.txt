@@ -1,4 +1,4 @@
-Playlist Builder (UI + command line)
+Schedule Builder (UI + command line)
 ================================
 
 ON THIS COMPUTER

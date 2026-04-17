@@ -2,7 +2,7 @@
 
 Rules are **per series** and **per clock slot** ``(weekday, half-hour slot)``. If the **grid changes** and a
 different show occupies that slot, there is **no** carry-over repeat pattern from the previous show—scheduling
-for the new show is just **Nikki playlist order** as it airs (``next_episode`` in chronological order). Repeat
+for the new show is just **Nikki schedule order** as it airs (``next_episode`` in chronological order). Repeat
 edges only apply when the **same** show key appears at both the reference slot and the repeat slot.
 """
 
