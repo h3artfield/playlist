@@ -72,6 +72,9 @@ shows:
     kind: series
     nikki_sheet: "Real McCoys - NOTE - Each Seaso"
     prefix: MCC
+    # Sat 18:00–22:00 → Sun 0:00–4:00; Sat 22:00–24:00 → Sun 4:00–6:00 (schedule rule A, split pattern).
+    overnight_repeat_after: daily
+    overnight_repeat_pattern: mccoys
   jump_street:
     display_name: "21 Jump Street"
     kind: series

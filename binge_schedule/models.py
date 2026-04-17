@@ -71,6 +71,9 @@ class ShowDef:
     # ``daily`` (or legacy ``sunday`` / ``thursday``): for each calendar day D, D's 0:00–4:00 repeats the last N
     # slots of (D−1)'s 20:00–24:00 for that show (e.g. Tue 20:00–24:00 → Wed 0:00–4:00). N = number of early rows.
     overnight_repeat_after: Optional[str] = None
+    # When ``overnight_repeat_after`` is ``daily``: ``default`` = 20:00–24:00 → 0:00–4:00 only.
+    # ``mccoys`` = (D−1) 18:00–22:00 → D 0:00–4:00 and (D−1) 22:00–24:00 → D 4:00–6:00 (Real McCoys grid).
+    overnight_repeat_pattern: Optional[str] = None
 
 
 @dataclass

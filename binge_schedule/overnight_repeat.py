@@ -1,11 +1,14 @@
 """Apply scheduling rule **A**: early morning repeats the previous calendar day's late fringe.
 
-For each show with ``overnight_repeat_after: daily`` (or legacy ``sunday`` / ``thursday``, treated as ``daily``),
-each calendar day **D**: rows in **D** 0:00–4:00 match the **last N** episode codes from **D−1** 20:00–24:00
-(N = number of early rows). Examples: Sun→Mon, Tue→Wed (e.g. Hunter), Thu→Fri.
+For each show with ``overnight_repeat_after: daily`` (or legacy ``sunday`` / ``thursday``, treated as ``daily``):
 
-Runs on the **combined** BINGE dataframe (all processed weeks, including warm-up) so late/early align across ISO
-week boundaries. Nikki metadata for copied codes is filled from ``cat``.
+- **Default pattern** (``overnight_repeat_pattern`` omitted or ``default``): **D** 0:00–4:00 = last **N** codes from
+  **D−1** 20:00–24:00 (N = early row count). Examples: Tue→Wed (Hunter), Thu→Fri (Carol).
+
+- **McCoys pattern** (``overnight_repeat_pattern: mccoys``): **D** 0:00–4:00 = last **N** from **D−1** 18:00–22:00;
+  **D** 4:00–6:00 = last **M** from **D−1** 22:00–24:00 (e.g. Sat evening → Sun morning).
+
+Runs on the **combined** BINGE dataframe (all processed weeks, including warm-up). Nikki metadata fills from ``cat``.
 """
 
 from __future__ import annotations
@@ -22,6 +25,13 @@ from binge_schedule.show_resolve import resolve_show
 LATE_START = 20 * 60
 LATE_END = 24 * 60
 EARLY_END = 4 * 60
+# Real McCoys: prior 18:00–22:00 → 0:00–4:00; prior 22:00–24:00 → 4:00–6:00
+MCCOYS_BLOCK1_START = 18 * 60
+MCCOYS_BLOCK1_END = 22 * 60
+MCCOYS_BLOCK2_START = 22 * 60
+MCCOYS_BLOCK2_END = 24 * 60
+MCCOYS_EARLY2_START = 4 * 60
+MCCOYS_EARLY2_END = 6 * 60
 
 
 def _overnight_repeat_mode(raw: Optional[str]) -> Optional[str]:
@@ -85,6 +95,39 @@ def _indices_for(
     return out
 
 
+def _patch_overnight_block(
+    out: pd.DataFrame,
+    cat: Catalog,
+    key: str,
+    late_idx: list[tuple[int, int]],
+    early_idx: list[tuple[int, int]],
+    c_ep: str,
+    c_enum: str,
+    c_name: Optional[str],
+) -> None:
+    if not early_idx or not late_idx:
+        return
+    late_codes = [
+        str(out.loc[ri, c_ep]).strip()
+        for ri, _ in late_idx
+        if pd.notna(out.loc[ri, c_ep]) and str(out.loc[ri, c_ep]).strip().upper() != "MOVIE"
+    ]
+    n = len(early_idx)
+    if len(late_codes) < n:
+        return
+    take = late_codes[-n:]
+    for j, (ri, _) in enumerate(early_idx):
+        code = take[j]
+        ep_obj = _episode_for_code(cat, key, code)
+        if ep_obj is None:
+            out.loc[ri, c_ep] = code
+            continue
+        out.loc[ri, c_ep] = ep_obj.code
+        out.loc[ri, c_enum] = ep_obj.episode_num
+        if c_name is not None:
+            out.loc[ri, c_name] = ep_obj.title
+
+
 def apply_overnight_repeats_combined(cfg: BuildConfig, cat: Catalog, df: pd.DataFrame) -> pd.DataFrame:
     """Return a **normalized** copy of ``df`` with overnight repeat rows patched from Nikki."""
     out = normalize_binge_df_columns(df.copy())
@@ -117,31 +160,27 @@ def apply_overnight_repeats_combined(cfg: BuildConfig, cat: Catalog, df: pd.Data
     for d in sorted(dates):
         prev = d - timedelta(days=1)
         for key in daily_keys:
-            late_idx = _indices_for(
-                out, cfg, prev, key, LATE_START, LATE_END, c_date, c_start, c_show
-            )
-            early_idx = _indices_for(out, cfg, d, key, 0, EARLY_END, c_date, c_start, c_show)
-            if not early_idx or not late_idx:
-                continue
-            late_codes = [
-                str(out.loc[ri, c_ep]).strip()
-                for ri, _ in late_idx
-                if pd.notna(out.loc[ri, c_ep]) and str(out.loc[ri, c_ep]).strip().upper() != "MOVIE"
-            ]
-            n = len(early_idx)
-            if len(late_codes) < n:
-                continue
-            take = late_codes[-n:]
-            for j, (ri, _) in enumerate(early_idx):
-                code = take[j]
-                ep_obj = _episode_for_code(cat, key, code)
-                if ep_obj is None:
-                    out.loc[ri, c_ep] = code
-                    continue
-                out.loc[ri, c_ep] = ep_obj.code
-                out.loc[ri, c_enum] = ep_obj.episode_num
-                if c_name is not None:
-                    out.loc[ri, c_name] = ep_obj.title
+            sd = cfg.shows[key]
+            pat = (sd.overnight_repeat_pattern or "default").strip().lower()
+            if pat == "mccoys":
+                late1 = _indices_for(
+                    out, cfg, prev, key, MCCOYS_BLOCK1_START, MCCOYS_BLOCK1_END, c_date, c_start, c_show
+                )
+                early1 = _indices_for(out, cfg, d, key, 0, EARLY_END, c_date, c_start, c_show)
+                _patch_overnight_block(out, cat, key, late1, early1, c_ep, c_enum, c_name)
+                late2 = _indices_for(
+                    out, cfg, prev, key, MCCOYS_BLOCK2_START, MCCOYS_BLOCK2_END, c_date, c_start, c_show
+                )
+                early2 = _indices_for(
+                    out, cfg, d, key, MCCOYS_EARLY2_START, MCCOYS_EARLY2_END, c_date, c_start, c_show
+                )
+                _patch_overnight_block(out, cat, key, late2, early2, c_ep, c_enum, c_name)
+            else:
+                late_idx = _indices_for(
+                    out, cfg, prev, key, LATE_START, LATE_END, c_date, c_start, c_show
+                )
+                early_idx = _indices_for(out, cfg, d, key, 0, EARLY_END, c_date, c_start, c_show)
+                _patch_overnight_block(out, cat, key, late_idx, early_idx, c_ep, c_enum, c_name)
 
     return out
 

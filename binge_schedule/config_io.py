@@ -58,6 +58,11 @@ def _show_from_dict(key: str, d: dict[str, Any]) -> ShowDef:
             if d.get("overnight_repeat_after") is not None and str(d.get("overnight_repeat_after")).strip()
             else None
         ),
+        overnight_repeat_pattern=(
+            str(d["overnight_repeat_pattern"]).strip().lower()
+            if d.get("overnight_repeat_pattern") is not None and str(d.get("overnight_repeat_pattern")).strip()
+            else None
+        ),
     )
 
 
