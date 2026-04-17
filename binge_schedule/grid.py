@@ -101,10 +101,9 @@ def _is_empty(v: Optional[str]) -> bool:
 def segments_for_day(col: list[Optional[str]]) -> list[Segment]:
     """Split one weekday column into segments.
 
-    - **Same title run:** consecutive filled cells with identical text (after strip) merge into one segment
-      ``[i, i+run)`` so the schedule emits one airing for that run (not one episode row per duplicate cell).
-    - A **block** is a filled cell followed only by empty cells until the next fill.
-    - A **single** is a filled cell whose immediate next row is also filled with a *different* title (typical strip).
+    - A **block** is a filled cell followed only by empty cells until the next fill (e.g. Excel-merged hour).
+    - A **single** is a filled cell whose immediate next row is also filled (typical strip) — **one half-hour each**,
+      even when the text matches the previous cell (same show can repeat in consecutive rows; BINGE stays **per episode**).
     """
     if len(col) != 48:
         raise ValueError(f"Expected 48 slots, got {len(col)}")
@@ -115,18 +114,6 @@ def segments_for_day(col: list[Optional[str]]) -> list[Segment]:
             i += 1
             continue
         title = col[i]  # type: ignore
-        tstrip = str(title).strip()
-        run = 1
-        while (
-            i + run < 48
-            and not _is_empty(col[i + run])
-            and str(col[i + run]).strip() == tstrip
-        ):
-            run += 1
-        if run > 1:
-            out.append(Segment(i, i + run, title))
-            i += run
-            continue
         if i + 1 < 48 and _is_empty(col[i + 1]):
             j = i + 1
             while j < 48 and _is_empty(col[j]):

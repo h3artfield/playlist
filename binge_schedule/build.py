@@ -133,8 +133,8 @@ def rows_for_week(
     that show’s April pattern: **advance** on the first time an ``EPISODE`` code appears that week for that
     show; **repeat** replays that Nikki episode when the same code appears again. If April had a **different**
     show in that clock slot, there is no pattern for your show there—only **playlist / air order** (``next_episode``).
-    Consecutive identical titles in the grids column merge to one segment → one BINGE row spanning multiple
-    half-hours when needed.
+    Each scheduled **half-hour** is one BINGE row for series (one Nikki episode per slot), including consecutive
+    strip cells with the same program title.
     """
     monday = parse_monday(monday_s)
     dates = day_dates(monday)
@@ -220,25 +220,22 @@ def rows_for_week(
                     "Check nikki_sheet and kind in config."
                 )
 
-            # series — advance vs repeat from optional reference BINGE actions. Consecutive identical grid titles are
-            # one segment spanning multiple half-hours → one BINGE row for the full span (one episode airing).
+            # series — one half-hour row per slot; advance vs repeat from optional reference BINGE actions.
             n_slots = seg.end_slot - seg.start_slot
             wd = d.weekday()
-            if n_slots > 1:
-                slot0 = seg.start_slot
+            for k in range(n_slots):
+                slot = seg.start_slot + k
+                st_dt = combine_date_time(d, slot_clock_to_time(slot))
+                fin_dt = st_dt + timedelta(minutes=30)
                 ep = _episode_for_slot(
                     cfg,
                     cat,
                     key,
                     wd,
-                    slot0,
+                    slot,
                     episode_actions,
                     emitted,
                 )
-                for slot in range(seg.start_slot + 1, seg.end_slot):
-                    emitted[(key, wd, slot)] = ep
-                st_dt = combine_date_time(d, slot_clock_to_time(seg.start_slot))
-                fin_dt = st_dt + timedelta(minutes=30 * n_slots)
                 rows.append(
                     BingeRow(
                         date=d,
@@ -250,31 +247,6 @@ def rows_for_week(
                         episode_name=ep.title,
                     )
                 )
-            else:
-                for k in range(n_slots):
-                    slot = seg.start_slot + k
-                    st_dt = combine_date_time(d, slot_clock_to_time(slot))
-                    fin_dt = st_dt + timedelta(minutes=30)
-                    ep = _episode_for_slot(
-                        cfg,
-                        cat,
-                        key,
-                        wd,
-                        slot,
-                        episode_actions,
-                        emitted,
-                    )
-                    rows.append(
-                        BingeRow(
-                            date=d,
-                            start=_fmt_time(st_dt),
-                            finish=_fmt_time(fin_dt),
-                            episode=ep.code,
-                            show=sd.display_name,
-                            episode_num=ep.episode_num,
-                            episode_name=ep.title,
-                        )
-                    )
     rows.sort(key=_binge_row_sort_datetime)
     return rows
 
