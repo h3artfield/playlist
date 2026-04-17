@@ -53,6 +53,11 @@ def _show_from_dict(key: str, d: dict[str, Any]) -> ShowDef:
             if d.get("nikki_row_filter") is not None and str(d.get("nikki_row_filter")).strip()
             else None
         ),
+        overnight_repeat_after=(
+            str(d["overnight_repeat_after"]).strip().lower()
+            if d.get("overnight_repeat_after") is not None and str(d.get("overnight_repeat_after")).strip()
+            else None
+        ),
     )
 
 

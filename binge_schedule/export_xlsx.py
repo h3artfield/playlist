@@ -47,6 +47,7 @@ from binge_schedule.grid import (
     segments_for_day,
     sync_straddle_weeks_to_canonical_grids_file,
 )
+from binge_schedule.overnight_repeat import apply_overnight_repeats_with_prev
 
 
 def is_verbose_seed_noise(s: str) -> bool:
@@ -658,6 +659,8 @@ def export_both(
     for wk in sorted(week_list, key=lambda w: parse_monday(w.monday)):
         to_process.append((wk, False))
 
+    prev_merged_df: Optional[pd.DataFrame] = None
+
     for wk, warmup_only in to_process:
         mon = parse_monday(wk.monday)
         if wk.monday in sync_mondays:
@@ -679,7 +682,9 @@ def export_both(
         )
         df_norm = normalize_binge_df_columns(binge_rows_to_dataframe(rows))
         merged_df, _literal_notes = merge_literal_reference_binge_days(cfg, mon, df_norm)
+        merged_df = apply_overnight_repeats_with_prev(cfg, cat, merged_df, prev_merged_df, mon)
         reconcile_catalog_from_binge_dataframe(cfg, cat, merged_df)
+        prev_merged_df = merged_df
         if warmup_only:
             continue
         grid_raw_by_label[label] = grid_raw

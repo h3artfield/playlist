@@ -32,6 +32,8 @@ shows:
     nikki_sheet: "2025 JIM BOWIE"
     prefix: AJB
     start_episode_index: 60
+    # Mon 0–4 replays Sun 20–24 last 8 (schedule rule A; repeats each ISO week).
+    overnight_repeat_after: sunday
   texan:
     display_name: "The Texan"
     kind: series
@@ -54,6 +56,8 @@ shows:
     prefix: CBS
     # Sheet marks playable episodes with green fill in the Episode column (see note on sheet).
     nikki_row_filter: green_episode_cell
+    # Fri 0–4 replays Thu 20–24 tail (schedule rule A).
+    overnight_repeat_after: thursday
   mst3k:
     display_name: "Mystery Science Theater 3000"
     kind: series
