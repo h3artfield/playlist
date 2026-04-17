@@ -51,6 +51,8 @@ shows:
     kind: series
     nikki_sheet: "Renegade"
     prefix: REN
+    # Prior calendar day 20:00–24:00 → next day 0:00–4:00 (schedule rule A).
+    overnight_repeat_after: daily
   carol_burnett:
     display_name: "The Carol Burnett Show"
     kind: series
