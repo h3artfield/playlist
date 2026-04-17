@@ -24,6 +24,12 @@ reference_binge_sync_cursor_weeks:
 # are generated. Use the **first Monday of the next month** (e.g. 2026-05-04) so Fri–Sun May 1–3 and overnight
 # repeats (e.g. Carol after Thu 4/30) match the canonical file, not regenerated Nikki rows.
 reference_binge_literal_copy_before: "2026-05-04"
+# Optional: comma-separated station call letters — after export, copies BINGE.xlsx + BINGE GRIDS.xlsx into
+# out_dir/<station>/ for each. CLI: --stations "WXYZ,KABC". Streamlit: Stations field.
+# export_stations: "WXYZ, KABC"
+# Optional: after export, copy the generated BINGE.xlsx here (overwrites). Point June's reference_binge_file at
+# this path (e.g. archive May build, rerun May replaces the file).
+# save_binge_reference_copy_to: "../data/MAY 2026 BINGE.xlsx"
 
 shows:
   jim_bowie:

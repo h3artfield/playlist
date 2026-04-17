@@ -32,6 +32,12 @@ def build(
         "--week",
         help="Monday YYYY-MM-DD; limit export to these weeks (repeatable). Default: all weeks in config.",
     ),
+    stations: Optional[str] = typer.Option(
+        None,
+        "--stations",
+        "-s",
+        help="Comma-separated station labels; copies BINGE + GRIDS into out_dir/<station>/ each. Overrides YAML export_stations.",
+    ),
 ) -> None:
     """Generate BINGE.xlsx and BINGE GRIDS.xlsx from the content workbook and weekly grids."""
     cfg = load_build_config(config)
@@ -43,7 +49,12 @@ def build(
         if missing:
             typer.echo(f"Unknown week monday(s) not in config: {sorted(missing)}", err=True)
             raise typer.Exit(code=1)
-    binge, grids, warnings, seeded = export_both(cfg, out_dir, weeks=weeks_filter)
+    station_list = None
+    if stations is not None and str(stations).strip():
+        station_list = [p.strip() for p in str(stations).split(",") if p.strip()]
+    binge, grids, warnings, seeded = export_both(
+        cfg, out_dir, weeks=weeks_filter, export_stations=station_list
+    )
     typer.echo(f"Wrote {binge}")
     typer.echo(f"Wrote {grids}")
     for s in seeded:

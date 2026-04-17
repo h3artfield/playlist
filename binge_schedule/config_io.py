@@ -54,6 +54,20 @@ def _morning_weekdays_from_yaml(raw: Any) -> Optional[tuple[int, ...]]:
     return tuple(sorted(set(out)))
 
 
+def _export_stations_from_yaml(raw: Any) -> Optional[tuple[str, ...]]:
+    """Parse ``export_stations``: comma-separated string or YAML list of station labels."""
+    if raw is None:
+        return None
+    if isinstance(raw, list):
+        out = [str(x).strip() for x in raw if str(x).strip()]
+        return tuple(out) if out else None
+    s = str(raw).strip()
+    if not s:
+        return None
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    return tuple(parts) if parts else None
+
+
 def _binge_row_minutes_from_yaml(raw: Any) -> int:
     """Default ``30``. ``60`` = one BINGE row per clock hour; ``120`` = two-hour block (e.g. MST3K in April)."""
     if raw is None:
@@ -186,6 +200,13 @@ def load_build_config(path: str | Path) -> BuildConfig:
             str(raw["reference_binge_literal_copy_before"]).strip()
             if raw.get("reference_binge_literal_copy_before")
             and str(raw.get("reference_binge_literal_copy_before")).strip()
+            else None
+        ),
+        export_stations=_export_stations_from_yaml(raw.get("export_stations")),
+        save_binge_reference_copy_to=(
+            str(raw["save_binge_reference_copy_to"]).strip()
+            if raw.get("save_binge_reference_copy_to")
+            and str(raw.get("save_binge_reference_copy_to")).strip()
             else None
         ),
     )

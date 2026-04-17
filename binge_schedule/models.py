@@ -119,6 +119,12 @@ class BuildConfig:
     # ``reference_binge_file`` for that ISO week. Use the first Monday of the month you are generating (e.g. May 4)
     # so Fri–Sun and overnight rows before that Monday stay canonical from the reference workbook.
     reference_binge_literal_copy_before: Optional[str] = None
+    # Comma-separated or YAML list of station labels (e.g. call letters). After export, copy ``BINGE.xlsx`` and
+    # ``BINGE GRIDS.xlsx`` into ``out_dir/<station>/`` for each (sanitized folder name).
+    export_stations: Optional[tuple[str, ...]] = None
+    # After a successful export, copy the generated ``BINGE.xlsx`` to this path (overwrites). Use to archive May
+    # (etc.) so the next month can set ``reference_binge_file`` to that file; re-run replaces the archive.
+    save_binge_reference_copy_to: Optional[str] = None
 
 
 @dataclass

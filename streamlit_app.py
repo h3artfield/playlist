@@ -19,7 +19,7 @@ from dataclasses import asdict
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 import pandas as pd
 import streamlit as st
@@ -740,6 +740,13 @@ def _render_build_playlist(cfg, cfg_path: Path, nikki: Path) -> None:
         )
         return
 
+    stations_input = st.text_input(
+        "Stations (optional)",
+        value="",
+        placeholder="Comma-separated call letters, e.g. WXYZ, KABC — copies into subfolders under the output",
+        key="export_stations_input",
+    )
+
     run = st.button(
         "Create BINGE files",
         type="primary",
@@ -767,10 +774,13 @@ def _render_build_playlist(cfg, cfg_path: Path, nikki: Path) -> None:
             st.error("Grids file not found:\n" + "\n".join(f"- `{p}`" for p in missing_grids))
         else:
             out_dir = Path(tempfile.mkdtemp(prefix="binge_out_"))
+            station_kw: Optional[List[str]] = None
+            if stations_input.strip():
+                station_kw = [x.strip() for x in stations_input.split(",") if x.strip()]
             try:
                 with st.spinner("Working…"):
                     binge_path, grids_path, ovw, seeded = export_both(
-                        cfg, out_dir, weeks=selected_weeks
+                        cfg, out_dir, weeks=selected_weeks, export_stations=station_kw
                     )
             except Exception as e:
                 st.error(str(e))
@@ -783,6 +793,8 @@ def _render_build_playlist(cfg, cfg_path: Path, nikki: Path) -> None:
                     if is_verbose_seed_noise(s):
                         continue
                     if s.startswith("Copied"):
+                        st.success(s)
+                    elif s.startswith("Archived BINGE reference copy") or s.startswith("Station copy ["):
                         st.success(s)
                     elif any(
                         x in s.lower()

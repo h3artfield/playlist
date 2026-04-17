@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -50,12 +51,41 @@ from binge_schedule.grid import (
 from binge_schedule.overnight_repeat import apply_overnight_repeats_with_prev
 
 
+def _resolved_save_binge_reference_copy_path(cfg: BuildConfig) -> Optional[Path]:
+    raw = cfg.save_binge_reference_copy_to
+    if not raw or not str(raw).strip():
+        return None
+    p = Path(str(raw).strip())
+    if p.is_absolute():
+        return p
+    base = cfg.config_path.parent if cfg.config_path else Path.cwd()
+    return (base / p).resolve()
+
+
+def _sanitize_station_dir(label: str) -> str:
+    s = "".join(ch if ch not in ':/\\*?"<>|\n\r\t' else "_" for ch in label.strip())
+    s = s.strip("._") or "station"
+    return s
+
+
+def _export_station_labels(cfg: BuildConfig, override: Optional[Sequence[str]]) -> list[str]:
+    if override is not None:
+        return [x.strip() for x in override if str(x).strip()]
+    if cfg.export_stations:
+        return list(cfg.export_stations)
+    return []
+
+
 def is_verbose_seed_noise(s: str) -> bool:
     """True for legacy informational seed lines (per-show cursor sync, literal-copy stats) — omit from UI/CLI."""
     if "sync: cursor[" in s:
         return True
     if s.lstrip().lower().startswith("literal copy:"):
         return True
+    if s.startswith("Archived BINGE reference copy"):
+        return False
+    if s.startswith("Station copy ["):
+        return False
     return False
 
 
@@ -627,6 +657,7 @@ def export_both(
     weeks: Optional[list[WeekDef]] = None,
     binge_row_overrides: Optional[list[BingeRowOverride]] = None,
     binge_ui_notes: Optional[dict[str, str]] = None,
+    export_stations: Optional[Sequence[str]] = None,
 ) -> tuple[Path, Path, list[str], list[str]]:
     """Write **BINGE.xlsx** (full episode rows from Nikki) and **BINGE GRIDS.xlsx** (weekly strip layout).
 
@@ -636,6 +667,10 @@ def export_both(
     If the requested weeks skip a preceding ISO week (e.g. **May-only** without the Apr 27–May 3 sheet), the
     missing week is simulated once **only to advance cursors** so the first exported Monday follows Sunday night.
     **BINGE GRIDS** program cells match the source grids workbooks (show titles only) — not the enriched BINGE episode text.
+
+    If ``export_stations`` (or YAML ``export_stations``) is set, also copies both workbooks into
+    ``out_dir/<sanitized_label>/`` per station. If ``save_binge_reference_copy_to`` is set on the config, copies
+    the generated ``BINGE.xlsx`` to that path (overwrites) for use as next month’s ``reference_binge_file``.
     """
     week_list = list(weeks if weeks is not None else cfg.weeks)
     if not week_list:
@@ -716,6 +751,22 @@ def export_both(
     )
     write_grids_workbook(grids_path, grid_sheets, cfg, ui_notes=None)
     save_cursors_after_export(cat, resolved_cursor_state_path(cfg))
+
+    archive_path = _resolved_save_binge_reference_copy_path(cfg)
+    if archive_path is not None:
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(binge_path, archive_path)
+        seed_messages.append(f"Archived BINGE reference copy to {archive_path} (overwrites if present).")
+
+    station_labels = _export_station_labels(cfg, export_stations)
+    for label in station_labels:
+        sub = _sanitize_station_dir(label)
+        dest_dir = out_dir / sub
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(binge_path, dest_dir / "BINGE.xlsx")
+        shutil.copy2(grids_path, dest_dir / "BINGE GRIDS.xlsx")
+        seed_messages.append(f"Station copy [{label}]: {dest_dir / 'BINGE.xlsx'}")
+
     return binge_path, grids_path, override_warnings, seed_messages
 
 
