@@ -1540,7 +1540,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     if not all_from_start:
         st.warning("No weeks available from that start date.")
         return
-    default_weeks = min(4, len(all_from_start))
+    default_weeks = 1
     week_count = int(
         st.number_input(
             "How many weeks",
