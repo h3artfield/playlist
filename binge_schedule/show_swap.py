@@ -86,7 +86,7 @@ def _week_def_for_date(cfg: BuildConfig, d: date) -> Optional[WeekDef]:
     return None
 
 
-def _parse_schedule_anchor(raw: Any) -> Optional[tuple[date, time]]:
+def parse_schedule_anchor(raw: Any) -> Optional[tuple[date, time]]:
     if raw is None or not isinstance(raw, dict):
         return None
     dv = raw.get("date")
@@ -352,7 +352,7 @@ def apply_show_swap(
         p = Path(w.grids_file).resolve()
         by_file.setdefault(p, set()).add(w.sheet_name)
 
-    anchor_t = _parse_schedule_anchor(schedule_anchor)
+    anchor_t = parse_schedule_anchor(schedule_anchor)
     total_cells = 0
 
     if anchor_t is not None:

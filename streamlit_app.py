@@ -31,7 +31,7 @@ from binge_schedule.models import NikkiColumnHeaders, ShowDef
 from binge_schedule.cursor_state import resolved_cursor_state_path, resolved_nikki_workbook_path
 from binge_schedule.binge_to_grid import normalize_binge_df_columns
 from binge_schedule.export_xlsx import export_both, is_verbose_seed_noise
-from binge_schedule.show_swap import apply_show_swap
+from binge_schedule.show_swap import apply_show_swap, parse_schedule_anchor
 from binge_schedule.grid import (
     ensure_grids_workbooks_for_weeks,
     weeks_with_monday_in_calendar_month,
@@ -133,6 +133,74 @@ def _weeks_in_month(weeks: list, month_start: date) -> list:
     """
     y, m = month_start.year, month_start.month
     return weeks_with_monday_in_calendar_month(weeks, y, m)
+
+
+def _regenerate_binge_for_month(
+    cfg_path: Path, schedule_anchor: Any
+) -> tuple[bool, list[str], Optional[tuple[Path, Path, Path]]]:
+    """After a grid swap, rebuild BINGE + GRIDS for the calendar month that contains the anchor date."""
+    parsed = parse_schedule_anchor(schedule_anchor)
+    if not parsed:
+        return False, [], None
+    d, _ = parsed
+    month_start = date(d.year, d.month, 1)
+    cfg = load_build_config(cfg_path)
+    weeks = _weeks_in_month(cfg.weeks, month_start)
+    if not weeks:
+        return (
+            False,
+            [
+                f"No **weeks:** for **{month_start.strftime('%B %Y')}** — automatic BINGE export was skipped."
+            ],
+            None,
+        )
+    nikki_path = resolved_nikki_workbook_path(cfg)
+    if not nikki_path.is_file():
+        return (
+            False,
+            [f"Nikki workbook not found — automatic export skipped: `{nikki_path}`"],
+            None,
+        )
+    missing_grids: list[str] = []
+    for w in weeks:
+        if not Path(w.grids_file).is_file():
+            missing_grids.append(str(Path(w.grids_file)))
+    if missing_grids:
+        return (
+            False,
+            ["Grids file missing — automatic export skipped:"]
+            + [f"- `{p}`" for p in missing_grids],
+            None,
+        )
+    try:
+        created = ensure_grids_workbooks_for_weeks(weeks)
+    except (OSError, ValueError) as e:
+        return False, [f"Could not prepare grids: {e}"], None
+
+    out_dir = Path(tempfile.mkdtemp(prefix="binge_after_swap_"))
+    station_kw: Optional[List[str]] = None
+    if cfg.export_stations:
+        station_kw = list(cfg.export_stations)
+    try:
+        binge_path, grids_path, ovw, seeded = export_both(
+            cfg, out_dir, weeks=weeks, export_stations=station_kw
+        )
+    except Exception as e:
+        return False, [f"**Create BINGE files** failed after swap: {e}"], None
+
+    msgs: list[str] = [
+        f"Automatically regenerated **BINGE.xlsx** and **BINGE GRIDS.xlsx** for **{month_start.strftime('%B %Y')}** "
+        f"({len(weeks)} week tab(s)) — use the downloads below."
+    ]
+    if created:
+        msgs.append("Created grids shell(s): " + ", ".join(f"`{p}`" for p in created))
+    for w in ovw:
+        msgs.append(str(w))
+    for s in seeded:
+        if is_verbose_seed_noise(s):
+            continue
+        msgs.append(s)
+    return True, msgs, (binge_path, grids_path, out_dir)
 
 
 @lru_cache(maxsize=1)
@@ -946,11 +1014,25 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
                     schedule_anchor=swap_ctx.get("schedule_anchor"),
                 )
                 if ok:
+                    combined_msgs = list(swap_msgs)
+                    auto_ok = False
+                    anchor = swap_ctx.get("schedule_anchor")
+                    noop_same_show = "no grid change" in " ".join(swap_msgs).casefold()
+                    if anchor and not noop_same_show:
+                        r_ok, r_msgs, paths = _regenerate_binge_for_month(cfg_path, anchor)
+                        combined_msgs.extend(r_msgs)
+                        if r_ok and paths:
+                            bp, gp, od = paths
+                            st.session_state["binge_path"] = bp
+                            st.session_state["grids_path"] = gp
+                            st.session_state["out_dir"] = od
+                            auto_ok = True
                     st.session_state["swap_result"] = {
                         "old_show_labels": list(swap_ctx.get("old_show_labels") or []),
                         "archive_pick": pick,
                         "new_display": _display_name_for_archive_pick(cfg, pick),
-                        "messages": swap_msgs,
+                        "messages": combined_msgs,
+                        "auto_export_ok": auto_ok,
                     }
                     st.session_state.pop("swap_context", None)
                     st.session_state[_MAIN_NAV_PENDING_KEY] = "Playlist"
@@ -1109,10 +1191,22 @@ def _render_last_build_outputs(cfg, cfg_path: Path) -> None:
 def _render_playlist_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
     sr = st.session_state.get("swap_result")
     if sr:
-        st.success(
-            f"**Grids updated** for that slot: **{', '.join(sr['old_show_labels'])}** → **{sr['new_display']}** "
-            f"(`{sr['archive_pick']}`). Run **Create BINGE files** on **Build** to refresh **BINGE.xlsx**."
-        )
+        if sr.get("auto_export_ok"):
+            st.success(
+                f"**Grids updated** and **BINGE files regenerated** for that month: **{', '.join(sr['old_show_labels'])}** → "
+                f"**{sr['new_display']}** (`{sr['archive_pick']}`). Downloads below are the new **BINGE.xlsx** / **BINGE GRIDS.xlsx**."
+            )
+        elif sr.get("auto_export_ok") is False:
+            st.success(
+                f"**Grids updated** for that slot: **{', '.join(sr['old_show_labels'])}** → **{sr['new_display']}** "
+                f"(`{sr['archive_pick']}`). **BINGE export** did not run automatically — use **Create BINGE files** on **Build**, "
+                "or see *What changed* for details."
+            )
+        else:
+            st.success(
+                f"**Grids updated** for that slot: **{', '.join(sr['old_show_labels'])}** → **{sr['new_display']}** "
+                f"(`{sr['archive_pick']}`). Run **Create BINGE files** on **Build** to refresh **BINGE.xlsx**."
+            )
         msgs = sr.get("messages") or []
         if msgs:
             with st.expander("What changed", expanded=True):
