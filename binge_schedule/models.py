@@ -100,7 +100,8 @@ class BuildConfig:
     # first chronological ``EPISODE`` code for that show in the reference BINGE (so straddle April days match April).
     reference_binge_sync_cursor_weeks: Optional[list[str]] = None
     # If set (YYYY-MM-DD), BINGE rows with calendar date **strictly before** this date are taken verbatim from
-    # ``reference_binge_file`` for that ISO week (April straddle = copy April; May days still generated).
+    # ``reference_binge_file`` for that ISO week. Use the first Monday of the month you are generating (e.g. May 4)
+    # so Fri–Sun and overnight rows before that Monday stay canonical from the reference workbook.
     reference_binge_literal_copy_before: Optional[str] = None
 
 

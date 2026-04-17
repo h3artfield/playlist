@@ -29,7 +29,10 @@ from binge_schedule.config_io import load_build_config
 from binge_schedule.models import NikkiColumnHeaders, ShowDef
 from binge_schedule.cursor_state import resolved_cursor_state_path, resolved_nikki_workbook_path
 from binge_schedule.export_xlsx import export_both, is_verbose_seed_noise
-from binge_schedule.grid import ensure_grids_workbooks_for_weeks, week_overlaps_calendar_month
+from binge_schedule.grid import (
+    ensure_grids_workbooks_for_weeks,
+    weeks_with_monday_in_calendar_month,
+)
 from binge_schedule.workbook_discover import (
     parse_workbook_tab_option,
     synthetic_series_for_tab,
@@ -90,6 +93,7 @@ def _months_for_build_selector(weeks: list) -> list[date]:
 
     The extra month (e.g. May when only April has ``weeks:``) is the usual **next** build target;
     episode cursors already reflect April after you run April—May still needs its own ``weeks:`` lines.
+    **Build this month** only exports weeks whose Monday falls in that month (May = Mon May 4 onward, not Apr 27).
     """
     dates: list[date] = []
     for w in weeks:
@@ -111,17 +115,12 @@ def _months_for_build_selector(weeks: list) -> list[date]:
 
 
 def _weeks_in_month(weeks: list, month_start: date) -> list:
-    """Weeks whose Mon-Sun range touches this calendar month (includes e.g. Apr 27 when building May)."""
+    """Weeks whose **Monday** is in this calendar month (first Monday = start of that month’s report).
+
+    Does **not** include the prior month’s straddle week (e.g. 2026-04-27 when building May).
+    """
     y, m = month_start.year, month_start.month
-    out = []
-    for w in weeks:
-        try:
-            d = date.fromisoformat(w.monday)
-        except ValueError:
-            continue
-        if week_overlaps_calendar_month(d, y, m):
-            out.append(w)
-    return sorted(out, key=lambda w: w.monday)
+    return weeks_with_monday_in_calendar_month(weeks, y, m)
 
 
 @lru_cache(maxsize=1)

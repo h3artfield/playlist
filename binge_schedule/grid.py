@@ -175,6 +175,17 @@ def _month_weeks_sorted(all_weeks: Sequence[WeekDef], year: int, month: int) -> 
     return out
 
 
+def weeks_with_monday_in_calendar_month(
+    weeks: Sequence[WeekDef], year: int, month: int
+) -> list[WeekDef]:
+    """Weeks whose anchor Monday lies in ``year``/``month``.
+
+    Excludes straddle ISO weeks whose Monday is still in the previous month (e.g. Mon 2026-04-27 when building
+    **May**), so monthly exports start with the **first Monday of that month** when combined with ``weeks:`` entries.
+    """
+    return _month_weeks_sorted(weeks, year, month)
+
+
 def _reference_week_prior_month(wk: WeekDef, all_weeks: Sequence[WeekDef]) -> Optional[WeekDef]:
     d = parse_monday(wk.monday)
     if d.month == 1:

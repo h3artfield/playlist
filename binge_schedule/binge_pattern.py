@@ -300,8 +300,10 @@ def merge_literal_reference_binge_days(
 ) -> tuple[pd.DataFrame, list[str]]:
     """Replace generated rows before ``reference_binge_literal_copy_before`` with rows from the reference workbook.
 
-    May days (on or after the cutoff date) stay **generated**; earlier calendar days are **copy-pasted** from
-    the canonical April BINGE for that ISO week. The returned notes list is always empty (no UI chatter).
+    Rows on or after the cutoff stay **generated**; earlier **calendar** dates (including Fri–Sun after a Thu
+    in the same ISO week, and overnight blocks into the next calendar day) are **copy-pasted** from the reference
+    sheet for that week. Set the cutoff to the **first Monday of the month** you are generating so pre‑Monday
+    days in a straddle week stay canonical. The returned notes list is always empty (no UI chatter).
     """
     raw = (cfg.reference_binge_literal_copy_before or "").strip()
     if not raw:

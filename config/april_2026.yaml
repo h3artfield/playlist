@@ -20,8 +20,10 @@ reference_binge_all_sheets: true
 # Align Nikki cursors to the reference BINGE for this ISO week so straddle April days match April episode codes.
 reference_binge_sync_cursor_weeks:
   - "2026-04-27"
-# Calendar days strictly before this date are copied verbatim from the April BINGE workbook; May days are generated.
-reference_binge_literal_copy_before: "2026-05-01"
+# Calendar days strictly before this date are copied verbatim from the reference BINGE workbook; on/after it, rows
+# are generated. Use the **first Monday of the next month** (e.g. 2026-05-04) so Fri–Sun May 1–3 and overnight
+# repeats (e.g. Carol after Thu 4/30) match the canonical file, not regenerated Nikki rows.
+reference_binge_literal_copy_before: "2026-05-04"
 
 shows:
   jim_bowie:
