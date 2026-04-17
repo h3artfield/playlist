@@ -5,7 +5,7 @@ from pathlib import Path
 import typer
 
 from binge_schedule.config_io import load_build_config
-from binge_schedule.export_xlsx import export_both
+from binge_schedule.export_xlsx import export_both, is_verbose_seed_noise
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -47,6 +47,8 @@ def build(
     typer.echo(f"Wrote {binge}")
     typer.echo(f"Wrote {grids}")
     for s in seeded:
+        if is_verbose_seed_noise(s):
+            continue
         if s.startswith("Copied") or any(
             x in s.lower()
             for x in ("could not", "cannot load", "missing", "skipping", "no program", "no ``weeks")

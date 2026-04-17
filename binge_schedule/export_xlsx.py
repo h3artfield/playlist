@@ -47,6 +47,16 @@ from binge_schedule.grid import (
     sync_straddle_weeks_to_canonical_grids_file,
 )
 
+
+def is_verbose_seed_noise(s: str) -> bool:
+    """True for legacy informational seed lines (per-show cursor sync, literal-copy stats) — omit from UI/CLI."""
+    if "sync: cursor[" in s:
+        return True
+    if s.lstrip().lower().startswith("literal copy:"):
+        return True
+    return False
+
+
 # --- Legacy reference styling (matches APRIL 2026 BINGE / BINGE GRIDS examples) ---
 
 _THIN_BLACK = Side(style="thin", color="FF000000")
@@ -615,11 +625,13 @@ def export_both(
         if wk.monday in sync_mondays:
             wdf = load_reference_week_dataframe(cfg, mon)
             if wdf is not None:
-                sync_cursors_from_reference_binge_week(
-                    cfg,
-                    cat,
-                    wdf,
-                    monday_label=wk.monday,
+                seed_messages.extend(
+                    sync_cursors_from_reference_binge_week(
+                        cfg,
+                        cat,
+                        wdf,
+                        monday_label=wk.monday,
+                    )
                 )
 
         grid_raw = load_grid_sheet(wk.grids_file, wk.sheet_name)

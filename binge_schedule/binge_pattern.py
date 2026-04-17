@@ -205,6 +205,9 @@ def sync_cursors_from_reference_binge_week(
 
     Walks ``week_df`` in time order; the **first** row for each series show sets that show’s cursor to the Nikki
     index that would emit that code on the next ``next_episode`` call.
+
+    Returned strings are **only** warnings when a reference code has no matching Nikki row (skipped); per-show
+    success lines are not emitted.
     """
     notes: list[str] = []
     df = normalize_binge_df_columns(week_df.copy())
@@ -246,9 +249,6 @@ def sync_cursors_from_reference_binge_week(
             )
             continue
         cat.cursor[key] = idx
-        notes.append(
-            f"{monday_label} sync: cursor[{key!r}] = {idx} from first reference code {code!r}"
-        )
 
     return notes
 
@@ -301,24 +301,19 @@ def merge_literal_reference_binge_days(
     """Replace generated rows before ``reference_binge_literal_copy_before`` with rows from the reference workbook.
 
     May days (on or after the cutoff date) stay **generated**; earlier calendar days are **copy-pasted** from
-    the canonical April BINGE for that ISO week.
+    the canonical April BINGE for that ISO week. The returned notes list is always empty (no UI chatter).
     """
-    notes: list[str] = []
     raw = (cfg.reference_binge_literal_copy_before or "").strip()
     if not raw:
-        return generated, notes
+        return generated, []
     try:
         cutoff = date.fromisoformat(raw)
     except ValueError:
-        notes.append(f"reference_binge_literal_copy_before invalid date {raw!r}; skipping literal copy.")
-        return generated, notes
+        return generated, []
 
     ref = load_reference_week_dataframe(cfg, monday)
     if ref is None:
-        notes.append(
-            f"literal copy: no reference week in workbook for {monday.isoformat()}; keeping generated rows."
-        )
-        return generated, notes
+        return generated, []
 
     gen = normalize_binge_df_columns(generated.copy())
     ref_df = normalize_binge_df_columns(ref.copy())
@@ -332,8 +327,7 @@ def merge_literal_reference_binge_days(
     ref_take = ref_df[ref_df.apply(lambda r: row_d(r, c_date_r) < cutoff, axis=1)]
 
     if ref_take.empty:
-        notes.append(f"literal copy: reference had no rows before {cutoff.isoformat()} for week {monday.isoformat()}.")
-        return generated, notes
+        return generated, []
 
     merged = pd.concat([gen_keep, ref_take], ignore_index=True)
 
@@ -350,8 +344,4 @@ def merge_literal_reference_binge_days(
 
     merged["_dt"] = merged.apply(sort_dt, axis=1)
     merged = merged.sort_values("_dt", kind="mergesort").drop(columns=["_dt"])
-    notes.append(
-        f"literal copy: replaced calendar days before {cutoff.isoformat()} with reference BINGE ({len(ref_take)} rows); "
-        f"kept {len(gen_keep)} generated rows on/after cutoff."
-    )
-    return merged, notes
+    return merged, []

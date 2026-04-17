@@ -28,7 +28,7 @@ from binge_schedule.archive_normalize import normalize_episodes_for_archive
 from binge_schedule.config_io import load_build_config
 from binge_schedule.models import NikkiColumnHeaders, ShowDef
 from binge_schedule.cursor_state import resolved_cursor_state_path, resolved_nikki_workbook_path
-from binge_schedule.export_xlsx import export_both
+from binge_schedule.export_xlsx import export_both, is_verbose_seed_noise
 from binge_schedule.grid import ensure_grids_workbooks_for_weeks, week_overlaps_calendar_month
 from binge_schedule.workbook_discover import (
     parse_workbook_tab_option,
@@ -768,6 +768,8 @@ def _render_build_playlist(cfg, cfg_path: Path, nikki: Path) -> None:
                 st.session_state["grids_path"] = grids_path
                 st.session_state["out_dir"] = out_dir
                 for s in seeded:
+                    if is_verbose_seed_noise(s):
+                        continue
                     if s.startswith("Copied"):
                         st.success(s)
                     elif any(
