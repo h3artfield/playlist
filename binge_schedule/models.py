@@ -80,8 +80,8 @@ class ShowDef:
     # If true: reference BINGE has no rule for this (weekday, slot) but grid still stacks this show on the prior
     # half-hour — reuse that episode instead of advancing Nikki (fixes spurious back-to-back different eps).
     repeat_previous_slot_when_unmapped: bool = False
-    # BINGE row duration: ``30`` (default) = one row per half-hour; ``60`` = one row per clock hour (April template
-    # for 21 Jump Street, Hunter, etc.): two consecutive half-hour slots = one episode row 0:00–1:00 style.
+    # BINGE row duration: ``30`` (default) = one row per half-hour episode; ``60`` = one row per clock hour;
+    # ``120`` = one row per two-hour block (e.g. MST3K). Must match the grids / April intent (reference BINGE can have typos).
     binge_row_minutes: int = 30
 
 

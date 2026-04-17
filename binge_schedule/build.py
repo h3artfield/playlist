@@ -133,9 +133,8 @@ def rows_for_week(
     that show’s April pattern: **advance** on the first time an ``EPISODE`` code appears that week for that
     show; **repeat** replays that Nikki episode when the same code appears again. If April had a **different**
     show in that clock slot, there is no pattern for your show there—only **playlist / air order** (``next_episode``).
-    **30-minute** series: one BINGE row per half-hour. **60-minute** series (``binge_row_minutes: 60``) follow the
-    April workbook: two consecutive grid half-hours for that show → **one** row spanning 60 minutes and **one**
-    Nikki episode (e.g. Hunter, 21 Jump Street).
+    **30-minute** series (default): one BINGE row per half-hour. **60** / **120** ``binge_row_minutes`` merge grid
+    half-hours into one row per episode block (April template); reference BINGE typos do not override YAML.
     """
     monday = parse_monday(monday_s)
     dates = day_dates(monday)
@@ -225,8 +224,9 @@ def rows_for_week(
             n_slots = seg.end_slot - seg.start_slot
             wd = d.weekday()
             brm = int(getattr(sd, "binge_row_minutes", 30) or 30)
+            want_slots = brm // 30 if brm > 30 and brm % 30 == 0 else 0
 
-            if brm == 60 and n_slots == 2:
+            if want_slots > 0 and n_slots == want_slots:
                 slot0 = seg.start_slot
                 ep = _episode_for_slot(
                     cfg,
@@ -237,9 +237,10 @@ def rows_for_week(
                     episode_actions,
                     emitted,
                 )
-                emitted[(key, wd, slot0 + 1)] = ep
+                for off in range(1, n_slots):
+                    emitted[(key, wd, slot0 + off)] = ep
                 st_dt = combine_date_time(d, slot_clock_to_time(slot0))
-                fin_dt = st_dt + timedelta(minutes=60)
+                fin_dt = st_dt + timedelta(minutes=brm)
                 rows.append(
                     BingeRow(
                         date=d,

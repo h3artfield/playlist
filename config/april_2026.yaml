@@ -39,6 +39,8 @@ shows:
     kind: series
     nikki_sheet: "The Texan - Note - missing epis"
     prefix: TEX
+    # 30-minute episodes (one BINGE row per half-hour). Some April BINGE rows have bad end times — source typo, not 2h.
+    binge_row_minutes: 30
   hunter:
     display_name: "Hunter"
     kind: series
@@ -53,6 +55,7 @@ shows:
     kind: series
     nikki_sheet: "Renegade"
     prefix: REN
+    binge_row_minutes: 60
     # Prior calendar day 20:00–24:00 → next day 0:00–4:00 (schedule rule A).
     overnight_repeat_after: daily
   carol_burnett:
@@ -60,6 +63,7 @@ shows:
     kind: series
     nikki_sheet: "Carol Burnett - NOTE - EPISODE "
     prefix: CBS
+    binge_row_minutes: 60
     # Sheet marks playable episodes with green fill in the Episode column (see note on sheet).
     nikki_row_filter: green_episode_cell
     # Prior day late fringe → next day 0–4 (legacy key ``thursday`` = same daily rule).
@@ -69,6 +73,8 @@ shows:
     kind: series
     nikki_sheet: "MST3K - NOTE - Each episode fol"
     prefix: MST
+    # April BINGE: one row per 2-hour episode block.
+    binge_row_minutes: 120
   real_mccoys:
     display_name: "The Real McCoys"
     kind: series
@@ -91,11 +97,13 @@ shows:
     kind: series
     nikki_sheet: "The Saint - NOTE - Episode titl"
     prefix: SNT
+    binge_row_minutes: 60
   laugh_in:
     display_name: "Rowan & Martin's Laugh-In"
     kind: series
     nikki_sheet: "Laugh-In - NOTE - CC Files are "
     prefix: RML
+    binge_row_minutes: 60
   lucy:
     display_name: "The Lucy Show"
     kind: series
@@ -107,6 +115,7 @@ shows:
     kind: series
     nikki_sheet: "Tim Conway Comedy Hour - Note -"
     prefix: TCC
+    binge_row_minutes: 60
     nikki_style: leading_episode
 
   paid_programming:

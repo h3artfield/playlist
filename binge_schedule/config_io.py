@@ -55,12 +55,12 @@ def _morning_weekdays_from_yaml(raw: Any) -> Optional[tuple[int, ...]]:
 
 
 def _binge_row_minutes_from_yaml(raw: Any) -> int:
-    """Default 30; ``60`` matches April BINGE for hour-long episodic rows (e.g. Hunter, 21 Jump Street)."""
+    """Default ``30``. ``60`` = one BINGE row per clock hour; ``120`` = two-hour block (e.g. MST3K in April)."""
     if raw is None:
         return 30
     v = int(raw)
-    if v not in (30, 60):
-        raise ValueError(f"binge_row_minutes must be 30 or 60, got {raw!r}")
+    if v not in (30, 60, 120):
+        raise ValueError(f"binge_row_minutes must be 30, 60, or 120, got {raw!r}")
     return v
 
 

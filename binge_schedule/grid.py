@@ -128,11 +128,10 @@ def segments_for_day(col: list[Optional[str]]) -> list[Segment]:
 
 
 def segments_for_binge_scheduling(col: list[Optional[str]], cfg: BuildConfig) -> list[Segment]:
-    """Like :func:`segments_for_day`, but merges/chunks **series** segments for April-style hour-long BINGE rows.
+    """Like :func:`segments_for_day`, but merges/chunks **series** segments for April-style BINGE row lengths.
 
-    Shows with ``binge_row_minutes: 60`` get **one** scheduling segment per **two** consecutive half-hours
-    (strip: two filled cells with the same title → one hour; block: chunk multi-slot runs into pairs).
-    Other shows keep one half-hour segment each.
+    ``binge_row_minutes`` 60 → one segment per **two** half-hours; 120 → per **four** half-hours (two clock hours).
+    Strip: consecutive identical-title singles merge; block: chunk into runs of ``chunk_slots`` half-hours.
     """
     raw = segments_for_day(col)
     out: list[Segment] = []
@@ -156,35 +155,50 @@ def segments_for_binge_scheduling(col: list[Optional[str]], cfg: BuildConfig) ->
         mins = int(getattr(sd, "binge_row_minutes", 30) or 30)
         span = seg.end_slot - seg.start_slot
 
-        if mins != 60:
+        if mins <= 30 or mins % 30 != 0:
             out.append(seg)
             i += 1
             continue
 
-        # Hour-long episodic: pair consecutive 1-slot strip segments with the same series key.
-        if span == 1 and i + 1 < len(raw):
-            seg2 = raw[i + 1]
-            k2, s2 = resolve_show(seg2.cell_text, cfg.shows)
-            if (
-                k2 == key
-                and s2 is not None
-                and s2.kind == "series"
-                and int(getattr(s2, "binge_row_minutes", 30) or 30) == 60
-                and seg2.end_slot - seg2.start_slot == 1
-                and seg2.start_slot == seg.end_slot
-            ):
-                out.append(Segment(seg.start_slot, seg2.end_slot, seg.cell_text))
-                i += 2
-                continue
+        chunk_slots = mins // 30
 
-        # Merged block spanning multiple half-hours: one episode per clock hour (two slots).
-        if span >= 2:
+        # Consecutive 1-slot strip segments: merge ``chunk_slots`` singles with the same key and minutes.
+        if span == 1:
+            end_slot = seg.end_slot
+            j = i
+            merged = 1
+            while merged < chunk_slots and j + 1 < len(raw):
+                nx = raw[j + 1]
+                k2, s2 = resolve_show(nx.cell_text, cfg.shows)
+                if (
+                    k2 == key
+                    and s2 is not None
+                    and s2.kind == "series"
+                    and int(getattr(s2, "binge_row_minutes", 30) or 30) == mins
+                    and nx.end_slot - nx.start_slot == 1
+                    and nx.start_slot == end_slot
+                ):
+                    end_slot = nx.end_slot
+                    j += 1
+                    merged += 1
+                else:
+                    break
+            if merged == chunk_slots:
+                out.append(Segment(seg.start_slot, end_slot, seg.cell_text))
+                i += chunk_slots
+                continue
+            out.append(seg)
+            i += 1
+            continue
+
+        # Merged block: chunk into ``chunk_slots``-half-hour runs; remainder as 30-min singles.
+        if span >= chunk_slots:
             s0 = seg.start_slot
             while s0 < seg.end_slot:
                 rem = seg.end_slot - s0
-                if rem >= 2:
-                    out.append(Segment(s0, s0 + 2, seg.cell_text))
-                    s0 += 2
+                if rem >= chunk_slots:
+                    out.append(Segment(s0, s0 + chunk_slots, seg.cell_text))
+                    s0 += chunk_slots
                 else:
                     out.append(Segment(s0, s0 + 1, seg.cell_text))
                     s0 += 1
