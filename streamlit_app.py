@@ -636,18 +636,32 @@ def _list_grids_data_sheets(path: Path) -> list[str]:
     return [s for s in _list_xlsx_sheet_names(path) if s != "BINGE notes"]
 
 
-def _unique_show_labels_from_binge_df(df: pd.DataFrame) -> list[str]:
-    out = normalize_binge_df_columns(df.copy())
-    col = None
-    for c in out.columns:
-        if str(c).strip().upper() == "SHOW":
-            col = c
-            break
-    if col is None:
-        return []
-    ser = out[col].dropna().astype(str).str.strip()
-    ser = ser[ser != ""]
-    return sorted(set(ser.tolist()))
+def _find_binge_column_ci(df: pd.DataFrame, name: str) -> Optional[str]:
+    """Return actual column name whose stripped upper case equals ``name``."""
+    nu = name.strip().upper()
+    for c in df.columns:
+        if str(c).strip().upper() == nu:
+            return str(c)
+    return None
+
+
+def _binge_row_swap_summary(df: pd.DataFrame, idx: int) -> str:
+    """One-line label for fallback row picker."""
+    r = df.iloc[int(idx)]
+
+    def _cell(col: Optional[str]) -> str:
+        if not col or col not in r.index:
+            return "?"
+        v = r[col]
+        if pd.isna(v):
+            return "?"
+        s = str(v).strip()
+        return s if s else "?"
+
+    sc = _find_binge_column_ci(df, "SHOW")
+    stc = _find_binge_column_ci(df, "START TIME")
+    ec = _find_binge_column_ci(df, "EPISODE")
+    return f"Row {idx + 1}: {_cell(sc)} · {_cell(ec)} · {_cell(stc)}"
 
 
 def _display_name_for_archive_pick(cfg, sel: str) -> str:
@@ -699,34 +713,89 @@ def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
 
     if binge_df is not None:
         st.markdown("###### BINGE")
-        st.dataframe(binge_df, use_container_width=True, height=340, hide_index=True)
-        show_labels = _unique_show_labels_from_binge_df(binge_df)
-        if show_swap and show_labels:
+        show_col = _find_binge_column_ci(binge_df, "SHOW")
+        picked_row_idx: Optional[int] = None
+
+        if show_swap and show_col and len(binge_df) > 0:
+            sel_supported = _dataframe_row_selection_supported()
+            df_key = f"{key_prefix}_binge_swap_df"
+            if sel_supported:
+                event = st.dataframe(
+                    binge_df,
+                    use_container_width=True,
+                    height=340,
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    key=df_key,
+                )
+                rows_sel: list[int] = []
+                try:
+                    rows_sel = list(event["selection"]["rows"])  # type: ignore[index]
+                except (KeyError, TypeError, AttributeError):
+                    pass
+                if rows_sel:
+                    try:
+                        picked_row_idx = int(rows_sel[0])
+                    except (TypeError, ValueError, IndexError):
+                        picked_row_idx = None
+                if picked_row_idx is not None and not (0 <= picked_row_idx < len(binge_df)):
+                    picked_row_idx = None
+            else:
+                st.dataframe(binge_df, use_container_width=True, height=340, hide_index=True)
+                st.warning(
+                    "Upgrade Streamlit for row selection in the table: "
+                    "`pip install -U \"streamlit>=1.35\"`. Using row list instead."
+                )
+                picked_row_idx = int(
+                    st.selectbox(
+                        "Row to swap",
+                        list(range(len(binge_df))),
+                        format_func=lambda i: _binge_row_swap_summary(binge_df, int(i)),
+                        key=f"{key_prefix}_binge_row_fallback",
+                    )
+                )
+
             st.markdown("###### Change a show")
             st.caption(
-                "Choose **SHOW** labels from this tab, then open **Content archive** and pick the replacement. "
-                "Confirming writes **grids** (program cells) and, for a new Excel tab, your **setup YAML** + cursor file."
+                "Use the **row selector** on the left of the table (one row only). "
+                "Then open **Content archive** to pick the replacement — confirming updates **grids** "
+                "(and **YAML**/cursors when adding a new tab)."
             )
-            picked = st.multiselect(
-                "Shows to change (labels on this tab)",
-                options=show_labels,
-                key=f"{key_prefix}_swap_show_labels",
-            )
+            if picked_row_idx is not None:
+                sv = binge_df.iloc[picked_row_idx][show_col]
+                show_val = str(sv).strip() if pd.notna(sv) else ""
+                st.caption(f"**Selected row {picked_row_idx + 1} · SHOW:** {show_val or '—'}")
+            else:
+                st.caption("**No row selected yet** — click a row in the table above.")
+
             if st.button(
                 "Swap for… → Content archive",
                 type="secondary",
                 use_container_width=True,
                 key=f"{key_prefix}_swap_open_archive",
             ):
-                if not picked:
-                    st.warning("Select one or more show labels first.")
+                if picked_row_idx is None:
+                    st.warning("Select exactly one row in the BINGE table first.")
                 else:
-                    st.session_state["swap_context"] = {
-                        "old_show_labels": list(picked),
-                        "binge_sheet": bs,
-                    }
-                    st.session_state["main_nav_tabs"] = "Content archive"
-                    st.rerun()
+                    sv = binge_df.iloc[picked_row_idx][show_col]
+                    show_val = str(sv).strip() if pd.notna(sv) else ""
+                    if not show_val:
+                        st.warning("That row has no SHOW value.")
+                    else:
+                        st.session_state["swap_context"] = {
+                            "old_show_labels": [show_val],
+                            "binge_sheet": bs,
+                            "binge_row": picked_row_idx + 1,
+                        }
+                        st.session_state["main_nav_tabs"] = "Content archive"
+                        st.rerun()
+        else:
+            st.dataframe(binge_df, use_container_width=True, height=340, hide_index=True)
+            if show_swap and not show_col:
+                st.warning("This BINGE sheet has no **SHOW** column — use another tab or rebuild.")
+            elif show_swap and len(binge_df) == 0:
+                st.info("This tab has no rows.")
 
     if grid_sheets and gs != "(no sheets)":
         try:
@@ -750,12 +819,18 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
     if swap_ctx:
         olds = swap_ctx.get("old_show_labels") or []
         tab_hint = swap_ctx.get("binge_sheet")
+        row_hint = swap_ctx.get("binge_row")
+        ctx_bits: list[str] = []
+        if tab_hint:
+            ctx_bits.append(f"tab `{tab_hint}`")
+        if row_hint:
+            ctx_bits.append(f"row **{row_hint}**")
+        ctx_suffix = f" ({', '.join(ctx_bits)})" if ctx_bits else ""
         st.info(
             f"**Swap mode:** Choose the replacement show in **Pick a show** below, then click "
             f"**Use selected show as replacement**. "
-            f"Replacing BINGE label(s): **{', '.join(olds)}**"
-            + (f" (from tab `{tab_hint}`)" if tab_hint else "")
-            + ". Switch **Filter** to **All** if the show you need is not listed."
+            f"Replacing BINGE label(s): **{', '.join(olds)}**{ctx_suffix}. "
+            "Switch **Filter** to **All** if the show you need is not listed."
         )
 
     st.markdown(
