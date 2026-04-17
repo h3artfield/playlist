@@ -25,8 +25,12 @@ from binge_schedule.models import ShowDef
 
 
 def _workbook_path_from_config() -> Path:
-    raw = yaml.safe_load((ROOT / "config" / "april_2026.yaml").read_text(encoding="utf-8"))
-    return Path(raw["nikki_workbook"])
+    cfg_path = ROOT / "config" / "april_2026.yaml"
+    raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    p = Path(raw["nikki_workbook"])
+    if p.is_absolute():
+        return p
+    return (cfg_path.parent / p).resolve()
 
 
 def _yaml_series_by_sheet() -> dict[str, tuple[str, str | None, str | None]]:

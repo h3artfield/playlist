@@ -1,7 +1,8 @@
 # Safe defaults for Streamlit Community Cloud (public repo).
 # Content / local grid paths are not used by the BINGE → Grids upload flow.
 gracenote_binge_id: 45397
-nikki_workbook: "cloud/nikki_placeholder_not_used.xlsx"
+# Same workbook as local setup so the deployed app can load tabs (paths are relative to this YAML file).
+nikki_workbook: "../data/2024 Nikki Spreadsheets.xlsx"
 timezone_note: local
 wrap_episodes: true
 shows: {}

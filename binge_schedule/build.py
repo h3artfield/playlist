@@ -11,6 +11,7 @@ from binge_schedule.grid import (
     slot_clock_to_time,
 )
 from binge_schedule.binge_pattern import EpisodeActionMap
+from binge_schedule.cursor_state import resolved_nikki_workbook_path
 from binge_schedule.models import BingeRow, BuildConfig, Catalog, Episode, ShowDef
 from binge_schedule.show_resolve import resolve_show
 from binge_schedule import nikki
@@ -39,13 +40,14 @@ def build_catalog(cfg: BuildConfig) -> Catalog:
     rows exist in ``cat.by_show``, so scheduling never pulls a disallowed episode.
     """
     cat = Catalog()
+    wb_path = str(resolved_nikki_workbook_path(cfg))
     for key, sd in cfg.shows.items():
         if sd.kind != "series" or not sd.nikki_sheet:
             continue
         style = sd.nikki_style or nikki.default_style_for_sheet(sd.nikki_sheet)
         cols = nikki.effective_column_headers(sd, style=style)
         eps = nikki.load_sheet(
-            cfg.nikki_workbook,
+            wb_path,
             sd.nikki_sheet,
             style=style,
             prefix=sd.prefix,

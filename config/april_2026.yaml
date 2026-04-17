@@ -1,6 +1,7 @@
 # Paths use forward slashes; adjust if your content workbook or grids files move.
 gracenote_binge_id: 45397
-nikki_workbook: "C:/Users/h3art/Downloads/2024 Nikki Spreadsheets.xlsx"
+# Repo copy (also works on Streamlit Cloud). For a local-only path, use an absolute path instead.
+nikki_workbook: "../data/2024 Nikki Spreadsheets.xlsx"
 timezone_note: local
 # Long multi-week grids often need more episodes than exist in the content workbook; wrapping repeats from episode 1.
 wrap_episodes: true

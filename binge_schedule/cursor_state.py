@@ -9,6 +9,17 @@ from typing import Optional
 from binge_schedule.models import BuildConfig, Catalog
 
 
+def resolved_nikki_workbook_path(cfg: BuildConfig) -> Path:
+    """Path to the Nikki content workbook; relative paths are resolved next to the setup YAML (like reference BINGE)."""
+    raw = Path(str(cfg.nikki_workbook).strip())
+    if not str(raw):
+        return raw
+    if raw.is_absolute():
+        return raw
+    base = cfg.config_path.parent if cfg.config_path else Path.cwd()
+    return (base / raw).resolve()
+
+
 def resolved_cursor_state_path(cfg: BuildConfig) -> Optional[Path]:
     if not cfg.cursor_state_file or not str(cfg.cursor_state_file).strip():
         return None

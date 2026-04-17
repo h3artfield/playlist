@@ -27,7 +27,7 @@ from binge_schedule import nikki
 from binge_schedule.archive_normalize import normalize_episodes_for_archive
 from binge_schedule.config_io import load_build_config
 from binge_schedule.models import NikkiColumnHeaders, ShowDef
-from binge_schedule.cursor_state import resolved_cursor_state_path
+from binge_schedule.cursor_state import resolved_cursor_state_path, resolved_nikki_workbook_path
 from binge_schedule.export_xlsx import export_both
 from binge_schedule.grid import ensure_grids_workbooks_for_weeks, week_overlaps_calendar_month
 from binge_schedule.workbook_discover import (
@@ -837,7 +837,7 @@ def main() -> None:
         st.stop()
 
     cfg = load_build_config(cfg_path)
-    nikki_path = Path(cfg.nikki_workbook)
+    nikki_path = resolved_nikki_workbook_path(cfg)
 
     if page == "Content archive":
         st.header("Content archive")
