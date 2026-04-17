@@ -1753,14 +1753,10 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 if not auto_show_opts:
                     auto_show_opts = _semantic_candidates(cfg, group="", kind="series", exclude_keys=oto_source_keys)
                 if auto_show_opts:
-                    oto_pick = st.selectbox(
-                        "Matching genre replacement show",
-                        auto_show_opts,
-                        format_func=lambda k: (
-                            f"{cfg.shows[k].display_name} "
-                            f"({getattr(cfg.shows[k], 'semantic_group', None) or 'unlabeled'})"
-                        ),
-                        key="build_oto_pick_auto_show",
+                    oto_pick = auto_show_opts[0]
+                    pick_group = getattr(cfg.shows[oto_pick], "semantic_group", None) or "unlabeled"
+                    st.caption(
+                        f"Auto-picked matching genre show: **{cfg.shows[oto_pick].display_name}** (`{pick_group}`)."
                     )
                     oto_episode_rows = _episode_rows_for_archive_pick(cfg, oto_pick, nikki)
                 else:
@@ -1775,14 +1771,10 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 if not auto_movie_opts:
                     auto_movie_opts = _semantic_candidates(cfg, group="", kind="literal", exclude_keys=set())
                 if auto_movie_opts:
-                    oto_pick = st.selectbox(
-                        "Matching genre replacement movie/program",
-                        auto_movie_opts,
-                        format_func=lambda k: (
-                            f"{cfg.shows[k].display_name} "
-                            f"({getattr(cfg.shows[k], 'semantic_group', None) or 'unlabeled'})"
-                        ),
-                        key="build_oto_pick_auto_movie",
+                    oto_pick = auto_movie_opts[0]
+                    pick_group = getattr(cfg.shows[oto_pick], "semantic_group", None) or "unlabeled"
+                    st.caption(
+                        f"Auto-picked matching genre movie/program: **{cfg.shows[oto_pick].display_name}** (`{pick_group}`)."
                     )
                 else:
                     st.warning("No related movie/program candidates were found for auto-populate.")
@@ -1793,6 +1785,9 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     )
     mass_rows: list[dict[str, Any]] = []
     mass_pick: Optional[str] = None
+    mass_fill_mode = "Auto-populate matching genre show"
+    mass_source_group = ""
+    mass_source_keys: set[str] = set()
     if use_mass:
         if not slot_ids:
             st.warning("No editable schedule blocks found in the selected weeks.")
@@ -1846,13 +1841,69 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                     mass_rows = [slot_by_id[sid] for sid in sorted(expanded)]
                 else:
                     mass_rows = [slot_by_id[sid] for sid in base_ids if sid in slot_by_id]
-            if archive_options:
-                mass_pick = st.selectbox(
-                    "New show in those time blocks",
-                    archive_options,
-                    format_func=_archive_pick_label,
-                    key="build_mass_pick",
+            if mass_rows:
+                mass_source_keys = {
+                    k for k in (_slot_source_show_key(cfg, r["show"]) for r in mass_rows) if k is not None
+                }
+                src_groups = [g for g in (_semantic_group_for_show(cfg, k) for k in mass_source_keys) if g]
+                if src_groups:
+                    mass_source_group = sorted(src_groups)[0]
+                    st.caption(f"Mass semantic source group: `{mass_source_group}`")
+
+            mass_fill_mode = st.radio(
+                "Mass fill mode",
+                (
+                    "Auto-populate matching genre show",
+                    "Auto-populate matching genre movie/program",
+                    "Manual pick replacement show",
+                ),
+                horizontal=True,
+                key="build_mass_fill_mode",
+            )
+            if mass_fill_mode == "Manual pick replacement show":
+                if archive_options:
+                    mass_pick = st.selectbox(
+                        "Manual replacement show",
+                        archive_options,
+                        format_func=_archive_pick_label,
+                        key="build_mass_pick",
+                    )
+            elif mass_fill_mode == "Auto-populate matching genre show":
+                auto_mass_show_opts = _semantic_candidates(
+                    cfg,
+                    group=mass_source_group,
+                    kind="series",
+                    exclude_keys=mass_source_keys,
                 )
+                if not auto_mass_show_opts:
+                    auto_mass_show_opts = _semantic_candidates(
+                        cfg, group="", kind="series", exclude_keys=mass_source_keys
+                    )
+                if auto_mass_show_opts:
+                    mass_pick = auto_mass_show_opts[0]
+                    pick_group = getattr(cfg.shows[mass_pick], "semantic_group", None) or "unlabeled"
+                    st.caption(
+                        f"Auto-picked matching genre show: **{cfg.shows[mass_pick].display_name}** (`{pick_group}`)."
+                    )
+                else:
+                    st.warning("No related series candidates were found for mass auto-populate.")
+            else:
+                auto_mass_movie_opts = _semantic_candidates(
+                    cfg,
+                    group=mass_source_group,
+                    kind="literal",
+                    exclude_keys=set(),
+                )
+                if not auto_mass_movie_opts:
+                    auto_mass_movie_opts = _semantic_candidates(cfg, group="", kind="literal", exclude_keys=set())
+                if auto_mass_movie_opts:
+                    mass_pick = auto_mass_movie_opts[0]
+                    pick_group = getattr(cfg.shows[mass_pick], "semantic_group", None) or "unlabeled"
+                    st.caption(
+                        f"Auto-picked matching genre movie/program: **{cfg.shows[mass_pick].display_name}** (`{pick_group}`)."
+                    )
+                else:
+                    st.warning("No related movie/program candidates were found for mass auto-populate.")
             st.checkbox(
                 "I understand mass changes persist to source files.",
                 key="build_mass_confirm",
