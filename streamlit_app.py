@@ -1557,6 +1557,12 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         f"Selected weeks: **{len(selected_weeks)}** · "
         + ", ".join(f"`{m}`" for m in selected_mondays)
     )
+    # Reset change pickers when build window changes, so OTO/mass can never carry stale weeks.
+    scope_key = f"{start_date.isoformat()}|{week_count}|{'|'.join(selected_mondays)}"
+    if st.session_state.get("_build_scope_key") != scope_key:
+        for k in ("build_oto_slot_ids", "build_mass_seed_ids"):
+            st.session_state.pop(k, None)
+        st.session_state["_build_scope_key"] = scope_key
 
     template_slots, template_warnings = _schedule_template_slots(selected_weeks)
     for wmsg in template_warnings:
@@ -1579,7 +1585,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         return cfg.shows[opt].display_name
 
     st.markdown("##### Optional schedule changes")
-    st.caption("Template table is hidden, but OTO/mass controls are still available for the selected weeks.")
+    st.caption("OTO/mass block pickers are limited to the selected weeks above.")
     use_oto = st.checkbox(
         "Apply OTO (one-time-only) changes for this output",
         key="build_use_oto_changes",
@@ -1596,7 +1602,8 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
                 key="build_oto_slot_ids",
             )
-            oto_rows = [slot_by_id[sid] for sid in oto_ids if sid in slot_by_id]
+            oto_ids = [sid for sid in oto_ids if sid in slot_by_id]
+            oto_rows = [slot_by_id[sid] for sid in oto_ids]
             if archive_options:
                 oto_pick = st.selectbox(
                     "OTO replacement show",
@@ -1621,6 +1628,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
                 key="build_mass_seed_ids",
             )
+            base_ids = [sid for sid in base_ids if sid in slot_by_id]
             expand_pattern = st.checkbox(
                 "Expand by pattern (same weekday + start slot + current show)",
                 value=True,
