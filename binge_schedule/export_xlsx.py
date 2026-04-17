@@ -44,7 +44,7 @@ from binge_schedule.grid import (
     load_grid_sheet,
     parse_monday,
     seed_grids_from_prior_month,
-    segments_for_day,
+    segments_for_binge_scheduling,
     sync_straddle_weeks_to_canonical_grids_file,
 )
 from binge_schedule.overnight_repeat import apply_overnight_repeats_with_prev
@@ -454,11 +454,11 @@ def write_binge_workbook(
     wb.save(path)
 
 
-def _apply_segment_merges(ws, grid: list[list[Optional[str]]]) -> None:
+def _apply_segment_merges(ws, grid: list[list[Optional[str]]], cfg: BuildConfig) -> None:
     excel_data_start = 5
     for day_idx in range(7):
         col = [grid[r][day_idx] for r in range(48)]
-        for seg in segments_for_day(col):
+        for seg in segments_for_binge_scheduling(col, cfg):
             span = seg.end_slot - seg.start_slot
             if span > 1:
                 ws.merge_cells(
@@ -548,7 +548,7 @@ def _write_grids_sheet(
             if isinstance(val, time):
                 cell.number_format = "h:mm AM/PM;@"
 
-    _apply_segment_merges(ws, grid)
+    _apply_segment_merges(ws, grid, cfg)
     _apply_grids_program_richtext(ws, pt_body)
 
     # Col A & I = half width of Mon–Sun (B–H); all widths scaled vs. legacy formula.

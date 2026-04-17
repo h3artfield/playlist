@@ -54,6 +54,16 @@ def _morning_weekdays_from_yaml(raw: Any) -> Optional[tuple[int, ...]]:
     return tuple(sorted(set(out)))
 
 
+def _binge_row_minutes_from_yaml(raw: Any) -> int:
+    """Default 30; ``60`` matches April BINGE for hour-long episodic rows (e.g. Hunter, 21 Jump Street)."""
+    if raw is None:
+        return 30
+    v = int(raw)
+    if v not in (30, 60):
+        raise ValueError(f"binge_row_minutes must be 30 or 60, got {raw!r}")
+    return v
+
+
 def _nikki_columns_from_dict(raw: Any) -> Optional[NikkiColumnHeaders]:
     if raw is None or raw is False:
         return None
@@ -111,6 +121,7 @@ def _show_from_dict(key: str, d: dict[str, Any]) -> ShowDef:
         ),
         overnight_repeat_morning_weekdays=_morning_weekdays_from_yaml(d.get("overnight_repeat_morning_weekdays")),
         repeat_previous_slot_when_unmapped=bool(d.get("repeat_previous_slot_when_unmapped", False)),
+        binge_row_minutes=_binge_row_minutes_from_yaml(d.get("binge_row_minutes")),
     )
 
 

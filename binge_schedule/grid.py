@@ -11,7 +11,8 @@ from typing import Optional
 import pandas as pd
 from openpyxl import Workbook, load_workbook
 
-from binge_schedule.models import Segment, WeekDef
+from binge_schedule.models import BuildConfig, Segment, WeekDef
+from binge_schedule.show_resolve import resolve_show
 
 
 def _safe_excel_sheet_title(name: str) -> str:
@@ -123,6 +124,75 @@ def segments_for_day(col: list[Optional[str]]) -> list[Segment]:
         else:
             out.append(Segment(i, i + 1, title))
             i += 1
+    return out
+
+
+def segments_for_binge_scheduling(col: list[Optional[str]], cfg: BuildConfig) -> list[Segment]:
+    """Like :func:`segments_for_day`, but merges/chunks **series** segments for April-style hour-long BINGE rows.
+
+    Shows with ``binge_row_minutes: 60`` get **one** scheduling segment per **two** consecutive half-hours
+    (strip: two filled cells with the same title → one hour; block: chunk multi-slot runs into pairs).
+    Other shows keep one half-hour segment each.
+    """
+    raw = segments_for_day(col)
+    out: list[Segment] = []
+    i = 0
+    while i < len(raw):
+        seg = raw[i]
+        key, sd = resolve_show(seg.cell_text, cfg.shows)
+        if sd is None or key == "literal":
+            out.append(seg)
+            i += 1
+            continue
+        if sd.kind == "literal":
+            out.append(seg)
+            i += 1
+            continue
+        if sd.kind != "series":
+            out.append(seg)
+            i += 1
+            continue
+
+        mins = int(getattr(sd, "binge_row_minutes", 30) or 30)
+        span = seg.end_slot - seg.start_slot
+
+        if mins != 60:
+            out.append(seg)
+            i += 1
+            continue
+
+        # Hour-long episodic: pair consecutive 1-slot strip segments with the same series key.
+        if span == 1 and i + 1 < len(raw):
+            seg2 = raw[i + 1]
+            k2, s2 = resolve_show(seg2.cell_text, cfg.shows)
+            if (
+                k2 == key
+                and s2 is not None
+                and s2.kind == "series"
+                and int(getattr(s2, "binge_row_minutes", 30) or 30) == 60
+                and seg2.end_slot - seg2.start_slot == 1
+                and seg2.start_slot == seg.end_slot
+            ):
+                out.append(Segment(seg.start_slot, seg2.end_slot, seg.cell_text))
+                i += 2
+                continue
+
+        # Merged block spanning multiple half-hours: one episode per clock hour (two slots).
+        if span >= 2:
+            s0 = seg.start_slot
+            while s0 < seg.end_slot:
+                rem = seg.end_slot - s0
+                if rem >= 2:
+                    out.append(Segment(s0, s0 + 2, seg.cell_text))
+                    s0 += 2
+                else:
+                    out.append(Segment(s0, s0 + 1, seg.cell_text))
+                    s0 += 1
+            i += 1
+            continue
+
+        out.append(seg)
+        i += 1
     return out
 
 

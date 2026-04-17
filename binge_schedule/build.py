@@ -7,7 +7,7 @@ from binge_schedule.grid import (
     combine_date_time,
     day_dates,
     parse_monday,
-    segments_for_day,
+    segments_for_binge_scheduling,
     slot_clock_to_time,
 )
 from binge_schedule.binge_pattern import EpisodeActionMap
@@ -133,8 +133,9 @@ def rows_for_week(
     that show’s April pattern: **advance** on the first time an ``EPISODE`` code appears that week for that
     show; **repeat** replays that Nikki episode when the same code appears again. If April had a **different**
     show in that clock slot, there is no pattern for your show there—only **playlist / air order** (``next_episode``).
-    Each scheduled **half-hour** is one BINGE row for series (one Nikki episode per slot), including consecutive
-    strip cells with the same program title.
+    **30-minute** series: one BINGE row per half-hour. **60-minute** series (``binge_row_minutes: 60``) follow the
+    April workbook: two consecutive grid half-hours for that show → **one** row spanning 60 minutes and **one**
+    Nikki episode (e.g. Hunter, 21 Jump Street).
     """
     monday = parse_monday(monday_s)
     dates = day_dates(monday)
@@ -144,7 +145,7 @@ def rows_for_week(
     for day_index in range(7):
         d = dates[day_index]
         col = [grid[r][day_index] for r in range(48)]
-        for seg in segments_for_day(col):
+        for seg in segments_for_binge_scheduling(col, cfg):
             key, sd = resolve_show(seg.cell_text, cfg.shows)
             if sd is None or key == "literal":
                 n_slots = seg.end_slot - seg.start_slot
@@ -220,22 +221,25 @@ def rows_for_week(
                     "Check nikki_sheet and kind in config."
                 )
 
-            # series — one half-hour row per slot; advance vs repeat from optional reference BINGE actions.
+            # series — advance vs repeat from optional reference BINGE actions.
             n_slots = seg.end_slot - seg.start_slot
             wd = d.weekday()
-            for k in range(n_slots):
-                slot = seg.start_slot + k
-                st_dt = combine_date_time(d, slot_clock_to_time(slot))
-                fin_dt = st_dt + timedelta(minutes=30)
+            brm = int(getattr(sd, "binge_row_minutes", 30) or 30)
+
+            if brm == 60 and n_slots == 2:
+                slot0 = seg.start_slot
                 ep = _episode_for_slot(
                     cfg,
                     cat,
                     key,
                     wd,
-                    slot,
+                    slot0,
                     episode_actions,
                     emitted,
                 )
+                emitted[(key, wd, slot0 + 1)] = ep
+                st_dt = combine_date_time(d, slot_clock_to_time(slot0))
+                fin_dt = st_dt + timedelta(minutes=60)
                 rows.append(
                     BingeRow(
                         date=d,
@@ -247,6 +251,31 @@ def rows_for_week(
                         episode_name=ep.title,
                     )
                 )
+            else:
+                for k in range(n_slots):
+                    slot = seg.start_slot + k
+                    st_dt = combine_date_time(d, slot_clock_to_time(slot))
+                    fin_dt = st_dt + timedelta(minutes=30)
+                    ep = _episode_for_slot(
+                        cfg,
+                        cat,
+                        key,
+                        wd,
+                        slot,
+                        episode_actions,
+                        emitted,
+                    )
+                    rows.append(
+                        BingeRow(
+                            date=d,
+                            start=_fmt_time(st_dt),
+                            finish=_fmt_time(fin_dt),
+                            episode=ep.code,
+                            show=sd.display_name,
+                            episode_num=ep.episode_num,
+                            episode_name=ep.title,
+                        )
+                    )
     rows.sort(key=_binge_row_sort_datetime)
     return rows
 
