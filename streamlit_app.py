@@ -112,7 +112,7 @@ def _months_for_build_selector(weeks: list) -> list[date]:
 
     The extra month (e.g. May when only April has ``weeks:``) is the usual **next** build target;
     episode cursors already reflect April after you run April—May still needs its own ``weeks:`` lines.
-    **Build this month** only exports weeks whose Monday falls in that month (May = Mon May 4 onward, not Apr 27).
+    The month anchor is still used for unlock sequencing, but actual builds use Start date + week count.
     """
     dates: list[date] = []
     for w in weeks:
@@ -1531,49 +1531,31 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         st.error("Could not determine which month to build — check **weeks** in your setup.")
         return
 
-    next_locked = None
-    if len(unlocked) < len(pipeline):
-        next_locked = pipeline[len(unlocked)]
-
-    _coerce_schedule_month_session(unlocked, completed)
-    month_start = st.selectbox(
-        "Build this month",
-        unlocked,
-        index=_default_unlocked_month_index(unlocked, completed),
-        format_func=lambda d: d.strftime("%B %Y"),
-        key="schedule_month",
-    )
-    prev_m = st.session_state.get("_build_month_iso")
-    cur_m = month_start.isoformat()
-    if prev_m is not None and prev_m != cur_m:
-        for k in ("binge_path", "grids_path", "out_dir"):
-            st.session_state.pop(k, None)
-    st.session_state["_build_month_iso"] = cur_m
-
-    if next_locked is not None:
-        st.caption(
-            f"**{next_locked.strftime('%B %Y')}** unlocks after you run **Create BINGE files** successfully for "
-            f"**{unlocked[-1].strftime('%B %Y')}** (or delete `schedule_build_state.json` / legacy `playlist_build_state.json` next to your setup to reset)."
-        )
-
-    month_weeks = _weeks_in_month(cfg.weeks, month_start)
-    if not month_weeks:
-        st.warning(
-            f"No **`weeks:`** entries yet for **{month_start.strftime('%B %Y')}**. "
-            "Add one block per Monday (same shape as April: `monday`, `grids_file`, `sheet_name`). "
-            "Episode order still comes from your cursor file after April."
-        )
-        return
-
     buildable_weeks = _weeks_for_unlocked_months(cfg.weeks, unlocked)
     if not buildable_weeks:
         st.error("No weeks are currently unlocked to build.")
         return
 
+    prev_m = st.session_state.get("_build_month_iso")
+    cur_m = parse_monday(buildable_weeks[0].monday).isoformat()
+    if prev_m is not None and prev_m != cur_m:
+        for k in ("binge_path", "grids_path", "out_dir"):
+            st.session_state.pop(k, None)
+    st.session_state["_build_month_iso"] = cur_m
+
+    next_locked = None
+    if len(unlocked) < len(pipeline):
+        next_locked = pipeline[len(unlocked)]
+        st.caption(
+            f"Unlocked through **{unlocked[-1].strftime('%B %Y')}**. "
+            f"Next unlock: **{next_locked.strftime('%B %Y')}** after a successful build "
+            "(or reset `schedule_build_state.json` / legacy `playlist_build_state.json`)."
+        )
+
     st.markdown("##### Build options")
     min_day = parse_monday(buildable_weeks[0].monday)
     max_day = parse_monday(buildable_weeks[-1].monday) + timedelta(days=6)
-    default_start = parse_monday(month_weeks[0].monday)
+    default_start = parse_monday(buildable_weeks[0].monday)
     start_date = st.date_input(
         "Start date",
         value=default_start,
@@ -1586,7 +1568,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     if not all_from_start:
         st.warning("No weeks available from that start date.")
         return
-    default_weeks = min(max(1, len(month_weeks)), len(all_from_start))
+    default_weeks = min(4, len(all_from_start))
     week_count = int(
         st.number_input(
             "How many weeks",
@@ -1773,7 +1755,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         type="primary",
         use_container_width=True,
         disabled=bool(preflight_issues),
-        help=f"{len(selected_weeks)} week tab(s) for {month_start.strftime('%B %Y')}.",
+        help=f"{len(selected_weeks)} selected week tab(s).",
     )
 
     if run:
