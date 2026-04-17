@@ -289,22 +289,29 @@ def _mobile_styles() -> None:
         div[data-testid="stDownloadButton"] button:focus-visible {
             box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.5) !important;
         }
+        /* Segmented nav: Streamlit uses stButtonGroup (radio + aria-checked), not stSegmentedControl */
+        div[data-testid="stButtonGroup"],
         div[data-testid="stSegmentedControl"] {
             width: 100%;
         }
-        /* Selected segment: thick border — green accent */
+        div[data-testid="stButtonGroup"] button,
         div[data-testid="stSegmentedControl"] button {
             border-style: solid !important;
             border-radius: 12px !important;
-            transition: border-width 0.12s ease, border-color 0.12s ease !important;
+            transition: border-width 0.12s ease, border-color 0.12s ease, background-color 0.12s ease !important;
         }
+        div[data-testid="stButtonGroup"] button[aria-checked="false"],
+        div[data-testid="stButtonGroup"] button[aria-pressed="false"],
         div[data-testid="stSegmentedControl"] button[aria-pressed="false"] {
             border-width: 1px !important;
             border-color: rgba(255, 255, 255, 0.22) !important;
             background-color: transparent !important;
             background-image: none !important;
         }
-        /* Selected segment: green fill + border (Streamlit default primary is often red) */
+        /* Selected segment: green (default “primary” / checked state is red) */
+        div[data-testid="stButtonGroup"] button[aria-checked="true"],
+        div[data-testid="stButtonGroup"] button[aria-pressed="true"],
+        div[data-testid="stButtonGroup"] button[aria-selected="true"],
         div[data-testid="stSegmentedControl"] button[aria-pressed="true"],
         div[data-testid="stSegmentedControl"] button[aria-checked="true"],
         div[data-testid="stSegmentedControl"] button[aria-selected="true"],
@@ -315,6 +322,14 @@ def _mobile_styles() -> None:
             background-image: none !important;
             color: #ffffff !important;
         }
+        div[data-testid="stButtonGroup"] button[aria-checked="true"] *,
+        div[data-testid="stButtonGroup"] button[aria-pressed="true"] *,
+        div[data-testid="stSegmentedControl"] button[aria-pressed="true"] *,
+        div[data-testid="stSegmentedControl"] button[aria-checked="true"] * {
+            color: #ffffff !important;
+        }
+        div[data-testid="stButtonGroup"] button[aria-checked="true"]:hover,
+        div[data-testid="stButtonGroup"] button[aria-pressed="true"]:hover,
         div[data-testid="stSegmentedControl"] button[aria-pressed="true"]:hover,
         div[data-testid="stSegmentedControl"] button[aria-checked="true"]:hover {
             background-color: #166534 !important;
@@ -1006,49 +1021,20 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
         st.info(
             f"**Swap:** Under **Pick a show**, choose the program you want in that **same time slot**, then "
             f"**Use selected show as replacement**. "
-            f"Current label: **{', '.join(olds)}**{ctx_suffix}. "
-            "**Filter → All** if you don’t see the show."
+            f"Current label: **{', '.join(olds)}**{ctx_suffix}."
         )
 
-    st.markdown(
-        "**View content archive:** shows **on your April playlist** (from your setup file) are listed first, then **every "
-        "other Excel tab** except **`movies`**. **NEW SHOWS** is read as a flat catalog (`Artist — Sort Title`). "
-        "**Create BINGE files** only uses shows on the playlist; extra tabs are here so you can review them before "
-        "you add them."
-    )
-
-    filter_kind = st.radio(
-        "Filter",
-        ("All", "Series", "Literals"),
-        horizontal=False,
-        key="archive_filter",
-    )
-
-    def include_yaml(key: str) -> bool:
-        sd = cfg.shows[key]
-        if filter_kind == "All":
-            return True
-        if filter_kind == "Series":
-            return sd.kind == "series"
-        return sd.kind == "literal"
-
-    yaml_keys = sorted(
-        [k for k in cfg.shows if include_yaml(k)],
-        key=lambda k: cfg.shows[k].display_name.lower(),
-    )
+    yaml_keys = sorted(cfg.shows.keys(), key=lambda k: cfg.shows[k].display_name.lower())
     extra_tab_names: list[str] = []
     if nikki_path.is_file():
         tabs = _nikki_workbook_sheet_names(str(nikki_path.resolve()), _nikki_mtime(nikki_path))
         extra_tab_names = workbook_tabs_not_in_yaml(cfg, tabs)
     extra_opts = [workbook_tab_option(t) for t in extra_tab_names]
 
-    if filter_kind == "Literals":
-        option_keys = yaml_keys
-    else:
-        option_keys = yaml_keys + extra_opts
+    option_keys = yaml_keys + extra_opts
 
     if not option_keys:
-        st.info("No shows match this filter.")
+        st.info("No shows to list from this setup.")
         return
 
     def _archive_option_label(opt: str) -> str:
@@ -1057,25 +1043,10 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
             return f"{tab} _(not in playlist)_"
         return cfg.shows[opt].display_name
 
-    st.markdown("##### Shows & Excel tabs")
-    st.caption(
-        f"**{len(yaml_keys)}** on your playlist (from the setup file)"
-        + (
-            f" · **{len(extra_opts)}** more Excel tabs (everything except **`movies`** and tabs already on the playlist)."
-            if extra_opts
-            else " · every Excel tab is already on the playlist (except **`movies`**)."
-        )
-    )
-    if nikki_path.is_file():
-        tabs = _nikki_workbook_sheet_names(str(nikki_path.resolve()), _nikki_mtime(nikki_path))
-        st.caption(f"Workbook: **{len(tabs)}** sheets. Audit: `docs/NIKKI_WORKBOOK_TAB_AUDIT.md`.")
-    else:
-        st.caption("Content workbook path is missing or not a file.")
     sel = st.selectbox(
         "Pick a show",
         option_keys,
         format_func=_archive_option_label,
-        label_visibility="collapsed",
         key="archive_show_pick",
     )
     if swap_ctx:
