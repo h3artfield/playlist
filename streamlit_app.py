@@ -1,5 +1,5 @@
 """
-Playlist Builder — local Streamlit UI to create **BINGE.xlsx** and **BINGE GRIDS.xlsx**.
+Playlist Builder — Streamlit UI to build BINGE exports, browse the content archive, and edit playlist sources.
 
 Run from the project directory:
   streamlit run streamlit_app.py
@@ -29,7 +29,9 @@ from binge_schedule.archive_normalize import normalize_episodes_for_archive
 from binge_schedule.config_io import load_build_config
 from binge_schedule.models import NikkiColumnHeaders, ShowDef
 from binge_schedule.cursor_state import resolved_cursor_state_path, resolved_nikki_workbook_path
+from binge_schedule.binge_to_grid import normalize_binge_df_columns
 from binge_schedule.export_xlsx import export_both, is_verbose_seed_noise
+from binge_schedule.show_swap import apply_show_swap
 from binge_schedule.grid import (
     ensure_grids_workbooks_for_weeks,
     weeks_with_monday_in_calendar_month,
@@ -244,7 +246,12 @@ def _mobile_styles() -> None:
 def _render_top_nav() -> str:
     """Primary section switcher — top bar (replaces sidebar nav). Returns selected page name."""
     st.markdown(
-        '<p style="margin:0 0 0.35rem 0;font-size:0.75rem;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;opacity:0.55;">Playlist</p>',
+        '<h1 style="margin:0 0 0.5rem 0;font-size:1.35rem;font-weight:700;line-height:1.25;">'
+        "Build playlist, content archive, and playlists"
+        "</h1>"
+        '<p style="margin:0 0 0.75rem 0;font-size:0.85rem;opacity:0.8;">'
+        "Generate BINGE exports, browse the Nikki archive, then adjust playlist content and rebuild."
+        "</p>",
         unsafe_allow_html=True,
     )
     nav_col, setup_col = st.columns([5, 1], vertical_alignment="center")
@@ -252,17 +259,17 @@ def _render_top_nav() -> str:
         if hasattr(st, "segmented_control"):
             page = st.segmented_control(
                 "Section",
-                options=("Build playlist", "Content archive"),
-                key="main_nav",
+                options=("Build", "Content archive", "Playlist"),
+                key="main_nav_tabs",
                 label_visibility="collapsed",
                 width="stretch",
             )
         else:
             page = st.radio(
                 "Section",
-                ("Build playlist", "Content archive"),
+                ("Build", "Content archive", "Playlist"),
                 horizontal=True,
-                key="main_nav",
+                key="main_nav_tabs",
                 label_visibility="collapsed",
             )
     with setup_col:
@@ -283,7 +290,7 @@ def _render_top_nav() -> str:
                 label_visibility="collapsed",
             )
     if page is None:
-        return "Build playlist"
+        return "Build"
     return str(page)
 
 
@@ -524,23 +531,233 @@ def _render_archive_episode_browser(
         st.code(raw if len(raw) <= 800 else raw[:800] + "…", language=None)
 
 
-def _default_month_index(months: list[date]) -> int:
-    """Prefer the next calendar month in the setup file after today (e.g. May while it is still April).
+def _month_key(m: date) -> str:
+    return f"{m.year:04d}-{m.month:02d}"
 
-    Episode cursors do not depend on this choice—they come from the last successful build.
-    """
-    if not months:
+
+def _build_state_path(cfg_path: Path) -> Path:
+    return cfg_path.resolve().parent / "playlist_build_state.json"
+
+
+def _load_completed_months(cfg_path: Path) -> set[str]:
+    p = _build_state_path(cfg_path)
+    resolved = str(cfg_path.resolve())
+    if not p.is_file():
+        return set()
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return set()
+    if data.get("config_resolved") != resolved:
+        return set()
+    cm = data.get("completed_months")
+    if not isinstance(cm, list):
+        return set()
+    return {str(x) for x in cm if x}
+
+
+def _record_completed_month(cfg_path: Path, month_start: date) -> None:
+    p = _build_state_path(cfg_path)
+    resolved = str(cfg_path.resolve())
+    prev = _load_completed_months(cfg_path)
+    prev.add(_month_key(month_start))
+    out = {
+        "version": 1,
+        "config_resolved": resolved,
+        "completed_months": sorted(prev),
+    }
+    p.write_text(json.dumps(out, indent=2), encoding="utf-8")
+
+
+def _parse_sequence_start(raw: Optional[str]) -> Optional[date]:
+    if not raw or not str(raw).strip():
+        return None
+    s = str(raw).strip()
+    try:
+        d = date.fromisoformat(s[:10])
+    except ValueError:
+        return None
+    return date(d.year, d.month, 1)
+
+
+def _pipeline_months(months_all: list[date], build_sequence_start: Optional[str]) -> list[date]:
+    """Months in the in-app unlock chain (subset of ``months_all``), in calendar order."""
+    if not months_all:
+        return []
+    start = _parse_sequence_start(build_sequence_start)
+    if start is None:
+        return list(months_all)
+    sm = (start.year, start.month)
+    return [m for m in months_all if (m.year, m.month) >= sm]
+
+
+def _unlocked_months(pipeline: list[date], completed: set[str]) -> list[date]:
+    """Sequential unlock: first month always; each next month appears after the previous is marked complete."""
+    if not pipeline:
+        return []
+    out: list[date] = []
+    for i, m in enumerate(pipeline):
+        if i == 0:
+            out.append(m)
+            continue
+        prev = pipeline[i - 1]
+        if _month_key(prev) in completed:
+            out.append(m)
+        else:
+            break
+    return out
+
+
+def _default_unlocked_month_index(unlocked: list[date], completed: set[str]) -> int:
+    """Prefer the next month not yet completed; otherwise the latest unlocked."""
+    if not unlocked:
         return 0
-    today = date.today()
-    t = (today.year, today.month)
-    for i, first in enumerate(months):
-        m = (first.year, first.month)
-        if m > t:
+    for i, m in enumerate(unlocked):
+        if _month_key(m) not in completed:
             return i
-    return len(months) - 1
+    return len(unlocked) - 1
+
+
+def _list_xlsx_sheet_names(path: Path) -> list[str]:
+    import openpyxl
+
+    wb = openpyxl.load_workbook(path, read_only=True)
+    try:
+        return list(wb.sheetnames)
+    finally:
+        wb.close()
+
+
+def _list_binge_data_sheets(path: Path) -> list[str]:
+    return [s for s in _list_xlsx_sheet_names(path) if s != "BINGE notes"]
+
+
+def _list_grids_data_sheets(path: Path) -> list[str]:
+    return [s for s in _list_xlsx_sheet_names(path) if s != "BINGE notes"]
+
+
+def _unique_show_labels_from_binge_df(df: pd.DataFrame) -> list[str]:
+    out = normalize_binge_df_columns(df.copy())
+    col = None
+    for c in out.columns:
+        if str(c).strip().upper() == "SHOW":
+            col = c
+            break
+    if col is None:
+        return []
+    ser = out[col].dropna().astype(str).str.strip()
+    ser = ser[ser != ""]
+    return sorted(set(ser.tolist()))
+
+
+def _display_name_for_archive_pick(cfg, sel: str) -> str:
+    tab = parse_workbook_tab_option(sel)
+    if tab is not None:
+        return synthetic_series_for_tab(tab).display_name
+    return cfg.shows[sel].display_name
+
+
+def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
+    """In-page tables from the last generated BINGE / BINGE GRIDS in session (optional swap → archive)."""
+    if "binge_path" not in st.session_state or "grids_path" not in st.session_state:
+        return
+    bp = Path(st.session_state["binge_path"])
+    gp = Path(st.session_state["grids_path"])
+    if not bp.is_file() or not gp.is_file():
+        st.warning("BINGE or BINGE GRIDS file is missing on disk for this session.")
+        return
+
+    binge_sheets = _list_binge_data_sheets(bp)
+    grid_sheets = _list_grids_data_sheets(gp)
+    if not binge_sheets:
+        st.warning("No data sheets found in the BINGE workbook (excluding notes).")
+        return
+
+    st.markdown("##### Preview in app")
+    st.caption("Same files as the downloads — pick a week tab for each workbook.")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        bs = st.selectbox(
+            "BINGE week tab",
+            binge_sheets,
+            key=f"{key_prefix}_preview_binge_sheet",
+        )
+    with c2:
+        gs = st.selectbox(
+            "BINGE GRIDS week tab",
+            grid_sheets if grid_sheets else ["(no sheets)"],
+            key=f"{key_prefix}_preview_grids_sheet",
+        )
+
+    try:
+        binge_df = pd.read_excel(bp, sheet_name=bs)
+        binge_df = normalize_binge_df_columns(binge_df)
+    except Exception as e:
+        st.error(f"Could not read BINGE sheet `{bs}`: {e}")
+        binge_df = None
+
+    if binge_df is not None:
+        st.markdown("###### BINGE")
+        st.dataframe(binge_df, use_container_width=True, height=340, hide_index=True)
+        show_labels = _unique_show_labels_from_binge_df(binge_df)
+        if show_swap and show_labels:
+            st.markdown("###### Change a show")
+            st.caption(
+                "Choose **SHOW** labels from this tab, then open **Content archive** and pick the replacement. "
+                "Confirming writes **grids** (program cells) and, for a new Excel tab, your **setup YAML** + cursor file."
+            )
+            picked = st.multiselect(
+                "Shows to change (labels on this tab)",
+                options=show_labels,
+                key=f"{key_prefix}_swap_show_labels",
+            )
+            if st.button(
+                "Swap for… → Content archive",
+                type="secondary",
+                use_container_width=True,
+                key=f"{key_prefix}_swap_open_archive",
+            ):
+                if not picked:
+                    st.warning("Select one or more show labels first.")
+                else:
+                    st.session_state["swap_context"] = {
+                        "old_show_labels": list(picked),
+                        "binge_sheet": bs,
+                    }
+                    st.session_state["main_nav_tabs"] = "Content archive"
+                    st.rerun()
+
+    if grid_sheets and gs != "(no sheets)":
+        try:
+            grids_df = pd.read_excel(gp, sheet_name=gs, header=None)
+        except Exception as e:
+            st.error(f"Could not read GRIDS sheet `{gs}`: {e}")
+        else:
+            st.markdown("###### BINGE GRIDS")
+            st.caption("Full sheet layout; program cells are typically rows 5–52, columns B–H (Mon–Sun).")
+            max_r = min(len(grids_df), 52)
+            st.dataframe(
+                grids_df.iloc[:max_r],
+                use_container_width=True,
+                height=340,
+                hide_index=True,
+            )
 
 
 def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
+    swap_ctx = st.session_state.get("swap_context")
+    if swap_ctx:
+        olds = swap_ctx.get("old_show_labels") or []
+        tab_hint = swap_ctx.get("binge_sheet")
+        st.info(
+            f"**Swap mode:** Choose the replacement show in **Pick a show** below, then click "
+            f"**Use selected show as replacement**. "
+            f"Replacing BINGE label(s): **{', '.join(olds)}**"
+            + (f" (from tab `{tab_hint}`)" if tab_hint else "")
+            + ". Switch **Filter** to **All** if the show you need is not listed."
+        )
+
     st.markdown(
         "**Content archive:** shows **on your April playlist** (from your setup file) are listed first, then **every "
         "other Excel tab** except **`movies`**. **NEW SHOWS** is read as a flat catalog (`Artist — Sort Title`). "
@@ -609,6 +826,43 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
         label_visibility="collapsed",
         key="archive_show_pick",
     )
+    if swap_ctx:
+        if st.button(
+            "Use selected show as replacement",
+            type="primary",
+            use_container_width=True,
+            key="archive_swap_confirm",
+        ):
+            pick = st.session_state.get("archive_show_pick")
+            if not pick:
+                st.warning("Pick a show in the list first.")
+            else:
+                ok, swap_msgs = apply_show_swap(
+                    cfg_path,
+                    list(swap_ctx.get("old_show_labels") or []),
+                    pick,
+                )
+                if ok:
+                    st.session_state["swap_result"] = {
+                        "old_show_labels": list(swap_ctx.get("old_show_labels") or []),
+                        "archive_pick": pick,
+                        "new_display": _display_name_for_archive_pick(cfg, pick),
+                        "messages": swap_msgs,
+                    }
+                    st.session_state.pop("swap_context", None)
+                    st.session_state["main_nav_tabs"] = "Playlist"
+                    st.rerun()
+                else:
+                    for m in swap_msgs:
+                        st.error(m)
+        if st.button(
+            "Cancel swap",
+            use_container_width=True,
+            key="archive_swap_cancel",
+        ):
+            st.session_state.pop("swap_context", None)
+            st.rerun()
+
     tab_only = parse_workbook_tab_option(sel)
     if tab_only is not None:
         st.caption(f"Excel tab `{tab_only}` — **not in playlist**")
@@ -700,6 +954,118 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
             )
 
 
+def _render_last_build_outputs(cfg, cfg_path: Path) -> None:
+    """Download buttons and details when a build has been run this session."""
+    if "binge_path" not in st.session_state or "grids_path" not in st.session_state:
+        return
+    bp = st.session_state["binge_path"]
+    gp = st.session_state["grids_path"]
+    od: Path = st.session_state["out_dir"]
+    with open(bp, "rb") as f:
+        binge_bytes = f.read()
+    with open(gp, "rb") as f:
+        grids_bytes = f.read()
+    st.download_button(
+        "BINGE.xlsx",
+        binge_bytes,
+        file_name="BINGE.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        key="dl_binge_shared",
+    )
+    st.download_button(
+        "BINGE GRIDS.xlsx",
+        grids_bytes,
+        file_name="BINGE GRIDS.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        key="dl_grids_shared",
+    )
+    if st.button("Open output folder", use_container_width=True, key="open_out_shared"):
+        err = _open_folder(od)
+        if err:
+            if "download buttons" in err:
+                st.info(err)
+            else:
+                st.error(err)
+        else:
+            st.toast(f"Opened: {od}")
+
+    with st.expander("Details", expanded=False):
+        st.caption(
+            "**BINGE.xlsx** episode code / # / name columns come from your **Nikki** content workbook and the "
+            "saved cursor file — not from the grids file. Grids only say *what show* airs *when*. The downloaded "
+            "**BINGE GRIDS.xlsx** keeps the same program text as your grids source (titles), not episode lines."
+        )
+        cur = resolved_cursor_state_path(cfg)
+        if cur:
+            st.caption(f"Episode order save file: `{cur}`")
+        st.caption(f"Wrap when a show runs out: **{cfg.wrap_episodes}**")
+
+
+def _render_playlist_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
+    sr = st.session_state.get("swap_result")
+    if sr:
+        st.success(
+            f"**Swap applied.** Replaced label(s) **{', '.join(sr['old_show_labels'])}** with "
+            f"**{sr['new_display']}** (`{sr['archive_pick']}`). Run **Create BINGE files** on **Build** to refresh exports."
+        )
+        msgs = sr.get("messages") or []
+        if msgs:
+            with st.expander("What changed", expanded=True):
+                for m in msgs:
+                    st.markdown(f"- {m}")
+        if st.button("Dismiss note", key="playlist_dismiss_swap"):
+            st.session_state.pop("swap_result", None)
+            st.rerun()
+        st.divider()
+
+    st.markdown(
+        "Your latest **Create BINGE files** run appears here and under **Build**. "
+        "Preview BINGE / GRIDS below, pick shows to swap, then finish in **Content archive**."
+    )
+    completed = _load_completed_months(cfg_path)
+    if completed:
+        st.caption(f"Months marked built in-app: **{', '.join(sorted(completed))}** (see `playlist_build_state.json`).")
+
+    if "binge_path" not in st.session_state:
+        st.info("Nothing generated yet — go to **Build** and run **Create BINGE files**.")
+    else:
+        st.markdown("##### Latest files")
+        _render_last_build_outputs(cfg, cfg_path)
+        _render_binge_grids_preview(key_prefix="playlist", show_swap=True)
+
+    st.divider()
+    st.markdown("##### Make changes")
+    st.caption(
+        "Playlist **content** (which episodes, order, show keys) lives in your setup YAML and the Nikki spreadsheet — "
+        "not inside the BINGE export buttons. Edit sources, then run **Create BINGE files** again on **Build**."
+    )
+    setup_abs = cfg_path.resolve()
+    st.markdown(f"- **Setup (YAML):** `{setup_abs}`")
+    st.markdown(f"- **Content workbook:** `{nikki_path.resolve()}`")
+    cur = resolved_cursor_state_path(cfg)
+    if cur:
+        st.markdown(f"- **Episode cursors:** `{cur}`")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Open setup folder", use_container_width=True, key="pl_open_cfg"):
+            err = _open_folder(setup_abs.parent)
+            if err and "download buttons" not in err:
+                st.error(err)
+            elif err:
+                st.info(err)
+    with c2:
+        if nikki_path.is_file() and st.button("Open Nikki folder", use_container_width=True, key="pl_open_nikki"):
+            err = _open_folder(nikki_path.parent)
+            if err and "download buttons" not in err:
+                st.error(err)
+            elif err:
+                st.info(err)
+        elif not nikki_path.is_file():
+            st.caption("Nikki path missing — fix **nikki_workbook** in the setup file.")
+
+
 def _render_build_playlist(cfg, cfg_path: Path, nikki: Path) -> None:
     if not nikki.is_file():
         st.error(
@@ -712,15 +1078,32 @@ def _render_build_playlist(cfg, cfg_path: Path, nikki: Path) -> None:
         st.error("No **weeks** in your setup file — add week lines or use another setup file.")
         return
 
-    months = _months_for_build_selector(cfg.weeks)
-    if not months:
+    months_all = _months_for_build_selector(cfg.weeks)
+    if not months_all:
         st.error("No weeks with valid dates in your setup file.")
         return
 
+    pipeline = _pipeline_months(months_all, cfg.build_sequence_start)
+    if not pipeline:
+        st.error(
+            "No months left in the build sequence — check **weeks** dates and **build_sequence_start** in your setup."
+        )
+        return
+
+    completed = _load_completed_months(cfg_path)
+    unlocked = _unlocked_months(pipeline, completed)
+    if not unlocked:
+        st.error("Could not determine which month to build — check **weeks** in your setup.")
+        return
+
+    next_locked = None
+    if len(unlocked) < len(pipeline):
+        next_locked = pipeline[len(unlocked)]
+
     month_start = st.selectbox(
         "Build this month",
-        months,
-        index=_default_month_index(months),
+        unlocked,
+        index=_default_unlocked_month_index(unlocked, completed),
         format_func=lambda d: d.strftime("%B %Y"),
         key="playlist_month",
     )
@@ -730,6 +1113,12 @@ def _render_build_playlist(cfg, cfg_path: Path, nikki: Path) -> None:
         for k in ("binge_path", "grids_path", "out_dir"):
             st.session_state.pop(k, None)
     st.session_state["_build_month_iso"] = cur_m
+
+    if next_locked is not None:
+        st.caption(
+            f"**{next_locked.strftime('%B %Y')}** unlocks after you run **Create BINGE files** successfully for "
+            f"**{unlocked[-1].strftime('%B %Y')}** (or delete `playlist_build_state.json` next to your setup to reset)."
+        )
 
     selected_weeks = _weeks_in_month(cfg.weeks, month_start)
     if not selected_weeks:
@@ -803,49 +1192,12 @@ def _render_build_playlist(cfg, cfg_path: Path, nikki: Path) -> None:
                         st.warning(s)
                 for w in ovw:
                     st.warning(w)
+                _record_completed_month(cfg_path, month_start)
 
     if "binge_path" in st.session_state and "grids_path" in st.session_state:
-        bp = st.session_state["binge_path"]
-        gp = st.session_state["grids_path"]
-        od: Path = st.session_state["out_dir"]
-        with open(bp, "rb") as f:
-            binge_bytes = f.read()
-        with open(gp, "rb") as f:
-            grids_bytes = f.read()
-        st.download_button(
-            "BINGE.xlsx",
-            binge_bytes,
-            file_name="BINGE.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-        st.download_button(
-            "BINGE GRIDS.xlsx",
-            grids_bytes,
-            file_name="BINGE GRIDS.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-        if st.button("Open folder", use_container_width=True):
-            err = _open_folder(od)
-            if err:
-                if "download buttons" in err:
-                    st.info(err)
-                else:
-                    st.error(err)
-            else:
-                st.toast(f"Opened: {od}")
-
-        with st.expander("Details", expanded=False):
-            st.caption(
-                "**BINGE.xlsx** episode code / # / name columns come from your **Nikki** content workbook and the "
-                "saved cursor file — not from the grids file. Grids only say *what show* airs *when*. The downloaded "
-                "**BINGE GRIDS.xlsx** keeps the same program text as your grids source (titles), not episode lines."
-            )
-            cur = resolved_cursor_state_path(cfg)
-            if cur:
-                st.caption(f"Episode order save file: `{cur}`")
-            st.caption(f"Wrap when a show runs out: **{cfg.wrap_episodes}**")
+        st.markdown("##### Latest files")
+        _render_last_build_outputs(cfg, cfg_path)
+        _render_binge_grids_preview(key_prefix="build", show_swap=False)
 
 
 def main() -> None:
@@ -871,8 +1223,11 @@ def main() -> None:
     if page == "Content archive":
         st.header("Content archive")
         _render_content_archive(cfg, cfg_path, nikki_path)
+    elif page == "Playlist":
+        st.header("Playlist")
+        _render_playlist_tab(cfg, cfg_path, nikki_path)
     else:
-        st.header("Build playlist")
+        st.header("Build")
         _render_build_playlist(cfg, cfg_path, nikki_path)
 
 

@@ -125,6 +125,9 @@ class BuildConfig:
     # After a successful export, copy the generated ``BINGE.xlsx`` to this path (overwrites). Use to archive May
     # (etc.) so the next month can set ``reference_binge_file`` to that file; re-run replaces the archive.
     save_binge_reference_copy_to: Optional[str] = None
+    # First calendar month included in the in-app “unlock next month” chain (YYYY-MM-DD, first of month).
+    # Months before this are omitted from **Build this month** (e.g. April already built offline; start at May).
+    build_sequence_start: Optional[str] = None
 
 
 @dataclass

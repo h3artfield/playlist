@@ -209,4 +209,9 @@ def load_build_config(path: str | Path) -> BuildConfig:
             and str(raw.get("save_binge_reference_copy_to")).strip()
             else None
         ),
+        build_sequence_start=(
+            str(raw["build_sequence_start"]).strip()
+            if raw.get("build_sequence_start") and str(raw.get("build_sequence_start")).strip()
+            else None
+        ),
     )
