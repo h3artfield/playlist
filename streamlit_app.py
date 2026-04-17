@@ -1577,6 +1577,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         extra_tab_names = workbook_tabs_not_in_yaml(cfg, tabs)
     extra_opts = [workbook_tab_option(t) for t in extra_tab_names]
     archive_options = yaml_keys + extra_opts
+    current_show_options = sorted({str(r["show"]).strip() for r in template_slots if str(r["show"]).strip()})
 
     def _archive_pick_label(opt: str) -> str:
         tab = parse_workbook_tab_option(opt)
@@ -1596,17 +1597,35 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         if not slot_ids:
             st.warning("No editable schedule blocks found in the selected weeks.")
         else:
-            oto_ids = st.multiselect(
-                "OTO: choose schedule blocks",
-                slot_ids,
-                format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
-                key="build_oto_slot_ids",
+            oto_mode = st.radio(
+                "OTO mode",
+                ("Choose time blocks", "Replace all blocks for one current show"),
+                horizontal=True,
+                key="build_oto_mode",
             )
-            oto_ids = [sid for sid in oto_ids if sid in slot_by_id]
-            oto_rows = [slot_by_id[sid] for sid in oto_ids]
+            if oto_mode == "Replace all blocks for one current show":
+                if not current_show_options:
+                    st.warning("No current shows were found in the selected weeks.")
+                else:
+                    oto_source_show = st.selectbox(
+                        "OTO current show to replace",
+                        current_show_options,
+                        key="build_oto_source_show",
+                    )
+                    oto_rows = [r for r in template_slots if r["show"] == oto_source_show]
+                    st.caption(f"Selected **{len(oto_rows)}** block(s) for `{oto_source_show}`.")
+            else:
+                oto_ids = st.multiselect(
+                    "OTO: choose time blocks",
+                    slot_ids,
+                    format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
+                    key="build_oto_slot_ids",
+                )
+                oto_ids = [sid for sid in oto_ids if sid in slot_by_id]
+                oto_rows = [slot_by_id[sid] for sid in oto_ids]
             if archive_options:
                 oto_pick = st.selectbox(
-                    "OTO replacement show",
+                    "New show in those time blocks",
                     archive_options,
                     format_func=_archive_pick_label,
                     key="build_oto_pick",
@@ -1622,37 +1641,58 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         if not slot_ids:
             st.warning("No editable schedule blocks found in the selected weeks.")
         else:
-            base_ids = st.multiselect(
-                "Mass: choose seed blocks",
-                slot_ids,
-                format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
-                key="build_mass_seed_ids",
+            mass_mode = st.radio(
+                "Mass mode",
+                (
+                    "Replace all blocks for one current show (selected weeks)",
+                    "Choose seed time blocks + expand pattern",
+                ),
+                horizontal=False,
+                key="build_mass_mode",
             )
-            base_ids = [sid for sid in base_ids if sid in slot_by_id]
-            expand_pattern = st.checkbox(
-                "Expand by pattern (same weekday + start slot + current show)",
-                value=True,
-                key="build_mass_expand_pattern",
-            )
-            if expand_pattern and base_ids:
-                expanded: set[str] = set()
-                for sid in base_ids:
-                    src = slot_by_id.get(sid)
-                    if not src:
-                        continue
-                    for row in template_slots:
-                        if (
-                            row["day_index"] == src["day_index"]
-                            and row["start_slot"] == src["start_slot"]
-                            and row["show"].casefold() == src["show"].casefold()
-                        ):
-                            expanded.add(row["slot_id"])
-                mass_rows = [slot_by_id[sid] for sid in sorted(expanded)]
+            if mass_mode == "Replace all blocks for one current show (selected weeks)":
+                if not current_show_options:
+                    st.warning("No current shows were found in the selected weeks.")
+                else:
+                    mass_source_show = st.selectbox(
+                        "Mass current show to replace",
+                        current_show_options,
+                        key="build_mass_source_show",
+                    )
+                    mass_rows = [r for r in template_slots if r["show"] == mass_source_show]
+                    st.caption(f"Selected **{len(mass_rows)}** block(s) for `{mass_source_show}`.")
             else:
-                mass_rows = [slot_by_id[sid] for sid in base_ids if sid in slot_by_id]
+                base_ids = st.multiselect(
+                    "Mass: choose seed time blocks",
+                    slot_ids,
+                    format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
+                    key="build_mass_seed_ids",
+                )
+                base_ids = [sid for sid in base_ids if sid in slot_by_id]
+                expand_pattern = st.checkbox(
+                    "Expand by pattern (same weekday + start slot + current show)",
+                    value=True,
+                    key="build_mass_expand_pattern",
+                )
+                if expand_pattern and base_ids:
+                    expanded: set[str] = set()
+                    for sid in base_ids:
+                        src = slot_by_id.get(sid)
+                        if not src:
+                            continue
+                        for row in template_slots:
+                            if (
+                                row["day_index"] == src["day_index"]
+                                and row["start_slot"] == src["start_slot"]
+                                and row["show"].casefold() == src["show"].casefold()
+                            ):
+                                expanded.add(row["slot_id"])
+                    mass_rows = [slot_by_id[sid] for sid in sorted(expanded)]
+                else:
+                    mass_rows = [slot_by_id[sid] for sid in base_ids if sid in slot_by_id]
             if archive_options:
                 mass_pick = st.selectbox(
-                    "Mass replacement show",
+                    "New show in those time blocks",
                     archive_options,
                     format_func=_archive_pick_label,
                     key="build_mass_pick",
