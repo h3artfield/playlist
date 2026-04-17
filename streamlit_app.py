@@ -301,16 +301,25 @@ def _mobile_styles() -> None:
         div[data-testid="stSegmentedControl"] button[aria-pressed="false"] {
             border-width: 1px !important;
             border-color: rgba(255, 255, 255, 0.22) !important;
+            background-color: transparent !important;
+            background-image: none !important;
         }
-        div[data-testid="stSegmentedControl"] button[aria-pressed="true"] {
-            border-width: 3px !important;
-            border-color: #22c55e !important;
-        }
+        /* Selected segment: green fill + border (Streamlit default primary is often red) */
+        div[data-testid="stSegmentedControl"] button[aria-pressed="true"],
         div[data-testid="stSegmentedControl"] button[aria-checked="true"],
         div[data-testid="stSegmentedControl"] button[aria-selected="true"],
         div[data-testid="stSegmentedControl"] [role="option"][aria-selected="true"] {
             border-width: 3px !important;
             border-color: #22c55e !important;
+            background-color: #15803d !important;
+            background-image: none !important;
+            color: #ffffff !important;
+        }
+        div[data-testid="stSegmentedControl"] button[aria-pressed="true"]:hover,
+        div[data-testid="stSegmentedControl"] button[aria-checked="true"]:hover {
+            background-color: #166534 !important;
+            border-color: #4ade80 !important;
+            color: #ffffff !important;
         }
         /* Horizontal radio fallback: thick border on chosen option */
         div[data-testid="stRadio"] > div {
@@ -325,6 +334,7 @@ def _mobile_styles() -> None:
         div[data-testid="stRadio"] label:has(input:checked) {
             border-width: 3px !important;
             border-color: #22c55e !important;
+            background-color: rgba(34, 197, 94, 0.18) !important;
         }
         </style>
         """,
@@ -332,23 +342,52 @@ def _mobile_styles() -> None:
     )
 
 
-_MAIN_NAV_OPTIONS = ("Build", "Content archive", "Playlist")
+_NAV_BUILD = "Build playlist"
+_NAV_ARCHIVE = "View content archive"
+_NAV_EDIT_PLAYLIST = "Edit playlists"
+_MAIN_NAV_OPTIONS = (_NAV_BUILD, _NAV_ARCHIVE, _NAV_EDIT_PLAYLIST)
+_LEGACY_MAIN_NAV_TAB: dict[str, str] = {
+    "Build": _NAV_BUILD,
+    "Content archive": _NAV_ARCHIVE,
+    "Playlist": _NAV_EDIT_PLAYLIST,
+    "Edit playlist": _NAV_EDIT_PLAYLIST,
+}
 # Must not assign to ``main_nav_tabs`` after the segmented control renders — use ``main_nav_pending`` + rerun instead.
 _MAIN_NAV_PENDING_KEY = "main_nav_pending"
 
 
+def _coerce_main_nav_value(val: Any) -> str | None:
+    if val is None:
+        return None
+    s = str(val)
+    if s in _MAIN_NAV_OPTIONS:
+        return s
+    return _LEGACY_MAIN_NAV_TAB.get(s)
+
+
 def _render_top_nav() -> str:
     """Primary section switcher — top bar (replaces sidebar nav). Returns selected page name."""
-    pending = st.session_state.pop(_MAIN_NAV_PENDING_KEY, None)
+    cur = st.session_state.get("main_nav_tabs")
+    coerced = _coerce_main_nav_value(cur)
+    if cur is not None and coerced is not None:
+        st.session_state["main_nav_tabs"] = coerced
+    elif cur is not None and coerced is None:
+        st.session_state["main_nav_tabs"] = _NAV_BUILD
+
+    pending_raw = st.session_state.pop(_MAIN_NAV_PENDING_KEY, None)
+    pending = _coerce_main_nav_value(pending_raw)
     if pending in _MAIN_NAV_OPTIONS:
         st.session_state["main_nav_tabs"] = pending
 
+    if st.session_state.get("main_nav_tabs") not in _MAIN_NAV_OPTIONS:
+        st.session_state["main_nav_tabs"] = _NAV_BUILD
+
     st.markdown(
         '<h1 style="margin:0 0 0.5rem 0;font-size:1.35rem;font-weight:700;line-height:1.25;">'
-        "Build playlist, content archive, and playlists"
+        "Build playlist, view content archive, and edit playlists."
         "</h1>"
         '<p style="margin:0 0 0.75rem 0;font-size:0.85rem;opacity:0.8;">'
-        "Generate BINGE exports, browse the Nikki archive, then adjust playlist content and rebuild."
+        "Generate BINGE exports, browse the archive, then change sources and run **Create BINGE files** again."
         "</p>",
         unsafe_allow_html=True,
     )
@@ -358,6 +397,7 @@ def _render_top_nav() -> str:
             page = st.segmented_control(
                 "Section",
                 options=_MAIN_NAV_OPTIONS,
+                default=_NAV_BUILD,
                 key="main_nav_tabs",
                 label_visibility="collapsed",
                 width="stretch",
@@ -388,7 +428,7 @@ def _render_top_nav() -> str:
                 label_visibility="collapsed",
             )
     if page is None:
-        return "Build"
+        return _NAV_BUILD
     return str(page)
 
 
@@ -888,9 +928,9 @@ def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
             st.info(
                 "**After the BINGE build:** select the **row** you’re replacing, then **Swap for…** and pick **whatever show** "
                 "you want from the archive. **Time and day stay the same** — only the program in that slot changes in your **grids** "
-                "(and the setup file if the show is new). Run **Create BINGE files** again on **Build** so the spreadsheet matches."
+                "(and the setup file if the show is new). Run **Create BINGE files** again on **Build playlist** so the spreadsheet matches."
             )
-            st.caption("One row → **Swap for… → Content archive** → confirm.")
+            st.caption("One row → **Swap for… → View content archive** → confirm.")
             if picked_row_idx is not None:
                 sv = binge_df.iloc[picked_row_idx][show_col]
                 show_val = str(sv).strip() if pd.notna(sv) else ""
@@ -899,7 +939,7 @@ def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
                 st.caption("**No row selected yet** — click a row in the table above.")
 
             if st.button(
-                "Swap for… → Content archive",
+                "Swap for… → View content archive",
                 type="secondary",
                 use_container_width=True,
                 key=f"{key_prefix}_swap_open_archive",
@@ -925,7 +965,7 @@ def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
                                 "binge_row": picked_row_idx + 1,
                                 "schedule_anchor": anchor_dict,
                             }
-                            st.session_state[_MAIN_NAV_PENDING_KEY] = "Content archive"
+                            st.session_state[_MAIN_NAV_PENDING_KEY] = _NAV_ARCHIVE
                             st.rerun()
         else:
             st.dataframe(binge_df, use_container_width=True, height=340, hide_index=True)
@@ -971,7 +1011,7 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
         )
 
     st.markdown(
-        "**Content archive:** shows **on your April playlist** (from your setup file) are listed first, then **every "
+        "**View content archive:** shows **on your April playlist** (from your setup file) are listed first, then **every "
         "other Excel tab** except **`movies`**. **NEW SHOWS** is read as a flat catalog (`Artist — Sort Title`). "
         "**Create BINGE files** only uses shows on the playlist; extra tabs are here so you can review them before "
         "you add them."
@@ -1077,7 +1117,7 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
                         "auto_export_ok": auto_ok,
                     }
                     st.session_state.pop("swap_context", None)
-                    st.session_state[_MAIN_NAV_PENDING_KEY] = "Playlist"
+                    st.session_state[_MAIN_NAV_PENDING_KEY] = _NAV_EDIT_PLAYLIST
                     st.rerun()
                 else:
                     for m in swap_msgs:
@@ -1241,13 +1281,13 @@ def _render_playlist_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
         elif sr.get("auto_export_ok") is False:
             st.success(
                 f"**Grids updated** for that slot: **{', '.join(sr['old_show_labels'])}** → **{sr['new_display']}** "
-                f"(`{sr['archive_pick']}`). **BINGE export** did not run automatically — use **Create BINGE files** on **Build**, "
+                f"(`{sr['archive_pick']}`). **BINGE export** did not run automatically — use **Create BINGE files** on **Build playlist**, "
                 "or see *What changed* for details."
             )
         else:
             st.success(
                 f"**Grids updated** for that slot: **{', '.join(sr['old_show_labels'])}** → **{sr['new_display']}** "
-                f"(`{sr['archive_pick']}`). Run **Create BINGE files** on **Build** to refresh **BINGE.xlsx**."
+                f"(`{sr['archive_pick']}`). Run **Create BINGE files** on **Build playlist** to refresh **BINGE.xlsx**."
             )
         msgs = sr.get("messages") or []
         if msgs:
@@ -1260,7 +1300,7 @@ def _render_playlist_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
         st.divider()
 
     st.markdown(
-        "Your latest export is here and on **Build**. Below: pick the **BINGE row** to replace, then choose the **archive** show — "
+        "Your latest export is here and on **Build playlist**. Below: pick the **BINGE row** to replace, then choose the **archive** show — "
         "**clock times stay put**; grids update for the next build."
     )
     completed = _load_completed_months(cfg_path)
@@ -1268,7 +1308,7 @@ def _render_playlist_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
         st.caption(f"Months marked built in-app: **{', '.join(sorted(completed))}** (see `playlist_build_state.json`).")
 
     if "binge_path" not in st.session_state:
-        st.info("Nothing generated yet — go to **Build** and run **Create BINGE files**.")
+        st.info("Nothing generated yet — go to **Build playlist** and run **Create BINGE files**.")
     else:
         st.markdown("##### Latest files")
         _render_last_build_outputs(cfg, cfg_path)
@@ -1277,8 +1317,8 @@ def _render_playlist_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
     st.divider()
     st.markdown("##### Make changes")
     st.caption(
-        "Playlist **content** (which episodes, order, show keys) lives in your setup YAML and the Nikki spreadsheet — "
-        "not inside the BINGE export buttons. Edit sources, then run **Create BINGE files** again on **Build**."
+        "**Edit playlists** in your sources: episodes, order, and show keys live in the setup YAML and Nikki spreadsheet — "
+        "not only inside the export files. Edit those, then run **Create BINGE files** again on **Build playlist**."
     )
     setup_abs = cfg_path.resolve()
     st.markdown(f"- **Setup (YAML):** `{setup_abs}`")
@@ -1459,14 +1499,14 @@ def main() -> None:
     cfg = load_build_config(cfg_path)
     nikki_path = resolved_nikki_workbook_path(cfg)
 
-    if page == "Content archive":
-        st.header("Content archive")
+    if page == _NAV_ARCHIVE:
+        st.header(_NAV_ARCHIVE)
         _render_content_archive(cfg, cfg_path, nikki_path)
-    elif page == "Playlist":
-        st.header("Playlist")
+    elif page == _NAV_EDIT_PLAYLIST:
+        st.header(_NAV_EDIT_PLAYLIST)
         _render_playlist_tab(cfg, cfg_path, nikki_path)
     else:
-        st.header("Build")
+        st.header(_NAV_BUILD)
         _render_build_playlist(cfg, cfg_path, nikki_path)
 
 
