@@ -268,10 +268,31 @@ def _mobile_styles() -> None:
         button[kind="primary"], button[kind="secondary"], .stDownloadButton button {
             min-height: 2.75rem;
         }
+        /* Primary actions + downloads: green (was default Streamlit red primary) */
+        button[kind="primary"],
+        .stDownloadButton button,
+        div[data-testid="stDownloadButton"] button {
+            background-color: #16a34e !important;
+            background-image: none !important;
+            border-color: #15803d !important;
+            color: #ffffff !important;
+        }
+        button[kind="primary"]:hover,
+        .stDownloadButton button:hover,
+        div[data-testid="stDownloadButton"] button:hover {
+            background-color: #15803d !important;
+            border-color: #166534 !important;
+            color: #ffffff !important;
+        }
+        button[kind="primary"]:focus-visible,
+        .stDownloadButton button:focus-visible,
+        div[data-testid="stDownloadButton"] button:focus-visible {
+            box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.5) !important;
+        }
         div[data-testid="stSegmentedControl"] {
             width: 100%;
         }
-        /* Selected segment: thick border (Build playlist vs Content archive) */
+        /* Selected segment: thick border — green accent */
         div[data-testid="stSegmentedControl"] button {
             border-style: solid !important;
             border-radius: 12px !important;
@@ -283,13 +304,13 @@ def _mobile_styles() -> None:
         }
         div[data-testid="stSegmentedControl"] button[aria-pressed="true"] {
             border-width: 3px !important;
-            border-color: #ff4b4b !important;
+            border-color: #22c55e !important;
         }
         div[data-testid="stSegmentedControl"] button[aria-checked="true"],
         div[data-testid="stSegmentedControl"] button[aria-selected="true"],
         div[data-testid="stSegmentedControl"] [role="option"][aria-selected="true"] {
             border-width: 3px !important;
-            border-color: #ff4b4b !important;
+            border-color: #22c55e !important;
         }
         /* Horizontal radio fallback: thick border on chosen option */
         div[data-testid="stRadio"] > div {
@@ -303,7 +324,7 @@ def _mobile_styles() -> None:
         }
         div[data-testid="stRadio"] label:has(input:checked) {
             border-width: 3px !important;
-            border-color: #ff4b4b !important;
+            border-color: #22c55e !important;
         }
         </style>
         """,
