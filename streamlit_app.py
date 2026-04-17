@@ -1028,7 +1028,7 @@ def _semantic_group_for_show(cfg, show_key: str) -> str:
     sd = cfg.shows.get(show_key)
     if sd is None:
         return ""
-    return str(sd.semantic_group or "").strip().lower()
+    return str(getattr(sd, "semantic_group", None) or "").strip().lower()
 
 
 def _semantic_candidates(cfg, *, group: str, kind: str, exclude_keys: set[str]) -> list[str]:
@@ -1038,7 +1038,7 @@ def _semantic_candidates(cfg, *, group: str, kind: str, exclude_keys: set[str]) 
             continue
         if k in exclude_keys:
             continue
-        g = str(sd.semantic_group or "").strip().lower()
+        g = str(getattr(sd, "semantic_group", None) or "").strip().lower()
         if group and g != group:
             continue
         out.append(k)
@@ -1756,7 +1756,10 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                     oto_pick = st.selectbox(
                         "Matching genre replacement show",
                         auto_show_opts,
-                        format_func=lambda k: f"{cfg.shows[k].display_name} ({cfg.shows[k].semantic_group or 'unlabeled'})",
+                        format_func=lambda k: (
+                            f"{cfg.shows[k].display_name} "
+                            f"({getattr(cfg.shows[k], 'semantic_group', None) or 'unlabeled'})"
+                        ),
                         key="build_oto_pick_auto_show",
                     )
                     oto_episode_rows = _episode_rows_for_archive_pick(cfg, oto_pick, nikki)
@@ -1775,7 +1778,10 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                     oto_pick = st.selectbox(
                         "Matching genre replacement movie/program",
                         auto_movie_opts,
-                        format_func=lambda k: f"{cfg.shows[k].display_name} ({cfg.shows[k].semantic_group or 'unlabeled'})",
+                        format_func=lambda k: (
+                            f"{cfg.shows[k].display_name} "
+                            f"({getattr(cfg.shows[k], 'semantic_group', None) or 'unlabeled'})"
+                        ),
                         key="build_oto_pick_auto_movie",
                     )
                 else:
