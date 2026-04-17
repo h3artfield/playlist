@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, time
+from collections.abc import Sequence
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -55,6 +56,34 @@ def is_verbose_seed_noise(s: str) -> bool:
     if s.lstrip().lower().startswith("literal copy:"):
         return True
     return False
+
+
+def _find_week_containing_date(all_weeks: Sequence[WeekDef], d: date) -> Optional[WeekDef]:
+    for w in all_weeks:
+        m = parse_monday(w.monday)
+        if m <= d < m + timedelta(days=7):
+            return w
+    return None
+
+
+def _cursor_warmup_week_if_needed(
+    requested: Sequence[WeekDef], all_weeks: Sequence[WeekDef]
+) -> Optional[WeekDef]:
+    """Return the ISO week that contains the Sunday *before* the earliest requested Monday, if that week is not already in the request.
+
+    Exporting **May** only (Mon May 4+) skips the Apr 27–May 3 sheet; without this, episode cursors never advance
+    through Sun May 3 and Mon 0:00 starts from a stale Nikki index (wrong episode codes vs Sun night).
+    """
+    if not requested:
+        return None
+    first = min(requested, key=lambda w: parse_monday(w.monday))
+    prev_sun = parse_monday(first.monday) - timedelta(days=1)
+    warm = _find_week_containing_date(all_weeks, prev_sun)
+    if warm is None:
+        return None
+    if warm.monday in {w.monday for w in requested}:
+        return None
+    return warm
 
 
 # --- Legacy reference styling (matches APRIL 2026 BINGE / BINGE GRIDS examples) ---
@@ -603,12 +632,15 @@ def export_both(
     **BINGE** comes from ``rows_for_week`` (Nikki + cursors; optional ``reference_binge_file`` for advance/repeat).
     If ``reference_binge_literal_copy_before`` is set, rows before that calendar date are **replaced** with the
     reference April workbook (verbatim); later days stay generated. Cursors are reconciled from the final sheet.
+    If the requested weeks skip a preceding ISO week (e.g. **May-only** without the Apr 27–May 3 sheet), the
+    missing week is simulated once **only to advance cursors** so the first exported Monday follows Sunday night.
     **BINGE GRIDS** program cells match the source grids workbooks (show titles only) — not the enriched BINGE episode text.
     """
-    week_list = weeks if weeks is not None else cfg.weeks
+    week_list = list(weeks if weeks is not None else cfg.weeks)
     if not week_list:
         raise ValueError("No weeks to export: pass ``weeks=`` or add entries under ``weeks:`` in config.")
-    ensure_grids_workbooks_for_weeks(week_list)
+    warm = _cursor_warmup_week_if_needed(week_list, cfg.weeks)
+    ensure_grids_workbooks_for_weeks(([warm] if warm else []) + week_list)
     seed_messages = seed_grids_from_prior_month(week_list, cfg.weeks)
     seed_messages.extend(sync_straddle_weeks_to_canonical_grids_file(week_list))
     cat = build_catalog(cfg)
@@ -620,7 +652,13 @@ def export_both(
 
     sync_mondays = {str(x).strip() for x in (cfg.reference_binge_sync_cursor_weeks or []) if str(x).strip()}
 
-    for wk in week_list:
+    to_process: list[tuple[WeekDef, bool]] = []
+    if warm:
+        to_process.append((warm, True))
+    for wk in sorted(week_list, key=lambda w: parse_monday(w.monday)):
+        to_process.append((wk, False))
+
+    for wk, warmup_only in to_process:
         mon = parse_monday(wk.monday)
         if wk.monday in sync_mondays:
             wdf = load_reference_week_dataframe(cfg, mon)
@@ -636,14 +674,16 @@ def export_both(
 
         grid_raw = load_grid_sheet(wk.grids_file, wk.sheet_name)
         label = sheet_label(wk.monday)
-        grid_raw_by_label[label] = grid_raw
         rows = rows_for_week(
             cfg, cat, grid_raw, wk.monday, episode_actions=episode_actions
         )
-        binge_sheets[label] = normalize_binge_df_columns(binge_rows_to_dataframe(rows))
-        merged_df, _literal_notes = merge_literal_reference_binge_days(cfg, mon, binge_sheets[label])
+        df_norm = normalize_binge_df_columns(binge_rows_to_dataframe(rows))
+        merged_df, _literal_notes = merge_literal_reference_binge_days(cfg, mon, df_norm)
+        reconcile_catalog_from_binge_dataframe(cfg, cat, merged_df)
+        if warmup_only:
+            continue
+        grid_raw_by_label[label] = grid_raw
         binge_sheets[label] = merged_df
-        reconcile_catalog_from_binge_dataframe(cfg, cat, binge_sheets[label])
         week_by_label[label] = wk
 
     override_warnings: list[str] = []
