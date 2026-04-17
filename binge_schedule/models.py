@@ -74,6 +74,9 @@ class ShowDef:
     # When ``overnight_repeat_after`` is ``daily``: ``default`` = 20:00–24:00 → 0:00–4:00 only.
     # ``mccoys`` = (D−1) 18:00–22:00 → D 0:00–4:00 and (D−1) 22:00–24:00 → D 4:00–6:00 (Real McCoys grid).
     overnight_repeat_pattern: Optional[str] = None
+    # If set: only patch **morning** rows on calendar day **D** when ``D.weekday()`` is in this set (Mon=0 … Sun=6).
+    # Omit for all days. Example: exclude Sunday so Sun 0:00 is not treated as a repeat of Sat when Sat has no airings.
+    overnight_repeat_morning_weekdays: Optional[tuple[int, ...]] = None
 
 
 @dataclass

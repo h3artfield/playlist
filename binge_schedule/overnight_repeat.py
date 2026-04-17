@@ -6,7 +6,11 @@ For each show with ``overnight_repeat_after: daily`` (or legacy ``sunday`` / ``t
   **D−1** 20:00–24:00 (N = early row count). Examples: Tue→Wed (Hunter), Thu→Fri (Carol).
 
 - **McCoys pattern** (``overnight_repeat_pattern: mccoys``): **D** 0:00–4:00 = last **N** from **D−1** 18:00–22:00;
-  **D** 4:00–6:00 = last **M** from **D−1** 22:00–24:00 (e.g. Sat evening → Sun morning).
+  **D** 4:00–6:00 = last **M** from **D−1** 22:00–24:00.
+
+- **Morning weekdays** (``overnight_repeat_morning_weekdays``): optional limit on which **calendar days** get morning
+  patches (``D.weekday()`` Mon=0 … Sun=6). Example: omit **Sunday** when that show does not air Saturday night but
+  resumes Sunday 0:00 from Nikki, not as a repeat of Saturday.
 
 Runs on the **combined** BINGE dataframe (all processed weeks, including warm-up). Nikki metadata fills from ``cat``.
 """
@@ -161,6 +165,8 @@ def apply_overnight_repeats_combined(cfg: BuildConfig, cat: Catalog, df: pd.Data
         prev = d - timedelta(days=1)
         for key in daily_keys:
             sd = cfg.shows[key]
+            if sd.overnight_repeat_morning_weekdays is not None and d.weekday() not in sd.overnight_repeat_morning_weekdays:
+                continue
             pat = (sd.overnight_repeat_pattern or "default").strip().lower()
             if pat == "mccoys":
                 late1 = _indices_for(

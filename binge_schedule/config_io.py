@@ -7,6 +7,52 @@ import yaml
 
 from binge_schedule.models import BuildConfig, NikkiColumnHeaders, ShowDef, WeekDef
 
+_WEEKDAY_NAMES: dict[str, int] = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+    "mon": 0,
+    "tue": 1,
+    "wed": 2,
+    "thu": 3,
+    "fri": 4,
+    "sat": 5,
+    "sun": 6,
+}
+
+
+def _morning_weekdays_from_yaml(raw: Any) -> Optional[tuple[int, ...]]:
+    """Parse ``overnight_repeat_morning_weekdays``: list of 0–6 and/or weekday names (Monday=0 … Sunday=6)."""
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not raw:
+        return None
+    out: list[int] = []
+    for item in raw:
+        if isinstance(item, int):
+            if not (0 <= item <= 6):
+                raise ValueError(f"overnight_repeat_morning_weekdays: invalid int {item!r} (need 0–6)")
+            out.append(item)
+            continue
+        s = str(item).strip().lower()
+        if s.isdigit():
+            v = int(s)
+            if not (0 <= v <= 6):
+                raise ValueError(f"overnight_repeat_morning_weekdays: invalid digit {v!r} (need 0–6)")
+            out.append(v)
+            continue
+        if s not in _WEEKDAY_NAMES:
+            raise ValueError(
+                f"overnight_repeat_morning_weekdays: unknown weekday {item!r} "
+                f"(use monday..sunday or mon..sun, or 0–6 with Monday=0)"
+            )
+        out.append(_WEEKDAY_NAMES[s])
+    return tuple(sorted(set(out)))
+
 
 def _nikki_columns_from_dict(raw: Any) -> Optional[NikkiColumnHeaders]:
     if raw is None or raw is False:
@@ -63,6 +109,7 @@ def _show_from_dict(key: str, d: dict[str, Any]) -> ShowDef:
             if d.get("overnight_repeat_pattern") is not None and str(d.get("overnight_repeat_pattern")).strip()
             else None
         ),
+        overnight_repeat_morning_weekdays=_morning_weekdays_from_yaml(d.get("overnight_repeat_morning_weekdays")),
     )
 
 
