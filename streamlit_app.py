@@ -766,11 +766,12 @@ def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
                 )
 
             st.markdown("###### Change a show")
-            st.caption(
-                "Use the **row selector** on the left of the table (one row only). "
-                "Then open **Content archive** to pick the replacement — confirming updates **grids** "
-                "(and **YAML**/cursors when adding a new tab)."
+            st.info(
+                "**After the BINGE build:** select the **row** you’re replacing, then **Swap for…** and pick **whatever show** "
+                "you want from the archive. **Time and day stay the same** — only the program in that slot changes in your **grids** "
+                "(and the setup file if the show is new). Run **Create BINGE files** again on **Build** so the spreadsheet matches."
             )
+            st.caption("One row → **Swap for… → Content archive** → confirm.")
             if picked_row_idx is not None:
                 sv = binge_df.iloc[picked_row_idx][show_col]
                 show_val = str(sv).strip() if pd.notna(sv) else ""
@@ -836,10 +837,10 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
             ctx_bits.append(f"row **{row_hint}**")
         ctx_suffix = f" ({', '.join(ctx_bits)})" if ctx_bits else ""
         st.info(
-            f"**Swap mode:** Choose the replacement show in **Pick a show** below, then click "
+            f"**Swap:** Under **Pick a show**, choose the program you want in that **same time slot**, then "
             f"**Use selected show as replacement**. "
-            f"Replacing BINGE label(s): **{', '.join(olds)}**{ctx_suffix}. "
-            "Switch **Filter** to **All** if the show you need is not listed."
+            f"Current label: **{', '.join(olds)}**{ctx_suffix}. "
+            "**Filter → All** if you don’t see the show."
         )
 
     st.markdown(
@@ -1091,8 +1092,8 @@ def _render_playlist_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
     sr = st.session_state.get("swap_result")
     if sr:
         st.success(
-            f"**Swap applied.** Replaced label(s) **{', '.join(sr['old_show_labels'])}** with "
-            f"**{sr['new_display']}** (`{sr['archive_pick']}`). Run **Create BINGE files** on **Build** to refresh exports."
+            f"**Grids updated** for that slot: **{', '.join(sr['old_show_labels'])}** → **{sr['new_display']}** "
+            f"(`{sr['archive_pick']}`). Run **Create BINGE files** on **Build** to refresh **BINGE.xlsx**."
         )
         msgs = sr.get("messages") or []
         if msgs:
@@ -1105,8 +1106,8 @@ def _render_playlist_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
         st.divider()
 
     st.markdown(
-        "Your latest **Create BINGE files** run appears here and under **Build**. "
-        "Preview BINGE / GRIDS below, pick shows to swap, then finish in **Content archive**."
+        "Your latest export is here and on **Build**. Below: pick the **BINGE row** to replace, then choose the **archive** show — "
+        "**clock times stay put**; grids update for the next build."
     )
     completed = _load_completed_months(cfg_path)
     if completed:

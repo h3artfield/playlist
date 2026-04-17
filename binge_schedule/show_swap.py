@@ -16,6 +16,17 @@ from binge_schedule.models import BuildConfig, ShowDef
 from binge_schedule.workbook_discover import parse_workbook_tab_option, synthetic_series_for_tab
 
 
+def _is_noop_swap(old_labels: list[str], new_display: str) -> bool:
+    """True when every old label matches the replacement display name (after strip, case-insensitive)."""
+    nd = new_display.strip().casefold()
+    if not old_labels or not nd:
+        return False
+    for o in old_labels:
+        if o.strip().casefold() != nd:
+            return False
+    return True
+
+
 def replace_cell_show_text(text: str, old_labels: list[str], new_display: str) -> str:
     """Match grid cell text to ``resolve_show``-style rules: exact name, then longest-prefix among ``old_labels``."""
     olds = sorted({str(o).strip() for o in old_labels if o and str(o).strip()}, key=len, reverse=True)
@@ -139,8 +150,9 @@ def apply_show_swap(
 
     Does not edit the Nikki ``.xlsx`` binary; new series use existing tabs via ``nikki_sheet`` in YAML.
 
-    Returns ``(ok, messages)`` — ``ok`` is False if YAML could not be written or no grids were updated when
-    files exist.
+    Returns ``(ok, messages)``. ``ok`` is True if grids were updated, YAML was added, or the swap was a
+    **no-op** (replacement **display_name** already matches the old label(s)). ``ok`` is False on I/O errors
+    or when grids exist but no cells matched and the swap was not a no-op.
     """
     messages: list[str] = []
     olds = [str(x).strip() for x in old_show_labels if x and str(x).strip()]
@@ -166,6 +178,13 @@ def apply_show_swap(
         new_key = archive_pick
         new_display = cfg.shows[archive_pick].display_name.strip()
         added_new_show = False
+
+    if not added_new_show and _is_noop_swap(olds, new_display):
+        return True, [
+            "You chose the **same** show as the replacement — **no grid change** (that slot already has that program title).",
+            "Pick a **different** show in the archive if you meant to replace the row.",
+            f"**{new_display}**",
+        ]
 
     if added_new_show:
         try:
