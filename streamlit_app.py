@@ -797,6 +797,17 @@ def _effective_weeks_from_start(all_weeks: list, start_on: date, count: int) -> 
     return tail[: max(1, int(count))]
 
 
+def _week_floor_from_reference_cutoff(cfg) -> Optional[date]:
+    raw = str(getattr(cfg, "reference_binge_literal_copy_before", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        d = date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+    return d
+
+
 def _format_duration_minutes(minutes: int) -> str:
     h, m = divmod(int(minutes), 60)
     if h and m:
@@ -1563,8 +1574,11 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         return
 
     buildable_weeks = _weeks_for_unlocked_months(cfg.weeks, unlocked)
+    floor_d = _week_floor_from_reference_cutoff(cfg)
+    if floor_d is not None:
+        buildable_weeks = [w for w in buildable_weeks if parse_monday(w.monday) >= floor_d]
     if not buildable_weeks:
-        st.error("No weeks are currently unlocked to build.")
+        st.error("No weeks are currently unlocked to build from your reference cutoff.")
         return
 
     prev_m = st.session_state.get("_build_month_iso")

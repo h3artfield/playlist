@@ -11,19 +11,18 @@ wrap_episodes: true
 # (Carol Burnett sheet). Add more filter types in code as you discover rules on other tabs.
 # Next-episode index per show (JSON next to this YAML). Omit to always use start_episode_index from shows:.
 cursor_state_file: episode_cursors.json
-# Canonical April BINGE: new vs rerun (same EPISODE code as previous row for that show) is read from this file.
+# Canonical reference set: last 3 weeks of April + first week of May (5-4).
 # Repo copy — required for Streamlit Cloud (paths are relative to this YAML file’s folder).
-reference_binge_file: "../data/APRIL 2026 BINGE.xlsx"
-reference_binge_sheet: "4-27-2026"
+reference_binge_file: "../data/MAY 2026 REFERENCE BINGE.xlsx"
+reference_binge_sheet: "5-4-2026"
 # Merge advance/repeat rules from every tab in that workbook (all April weeks); first sheet wins on conflicts.
 reference_binge_all_sheets: true
 # Align Nikki cursors to the reference BINGE for this ISO week so straddle April days match April episode codes.
 reference_binge_sync_cursor_weeks:
   - "2026-04-27"
 # Calendar days strictly before this date are copied verbatim from the reference BINGE workbook; on/after it, rows
-# are generated. Use the **first Monday of the next month** (e.g. 2026-05-04) so Fri–Sun May 1–3 and overnight
-# repeats (e.g. Carol after Thu 4/30) match the canonical file, not regenerated Nikki rows.
-reference_binge_literal_copy_before: "2026-05-04"
+# are generated. With first-week-May finalized, begin new generation from week 2 (Mon 2026-05-11).
+reference_binge_literal_copy_before: "2026-05-11"
 # Optional: comma-separated station call letters — after export, copies BINGE.xlsx + BINGE GRIDS.xlsx into
 # out_dir/<station>/ for each. CLI: --stations "WXYZ,KABC". Streamlit: Stations field.
 # export_stations: "WXYZ, KABC"
