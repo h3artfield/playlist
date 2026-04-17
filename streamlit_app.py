@@ -33,6 +33,7 @@ from binge_schedule.cursor_state import resolved_cursor_state_path, resolved_nik
 from binge_schedule.binge_to_grid import normalize_binge_df_columns
 from binge_schedule.export_xlsx import export_both, is_verbose_seed_noise
 from binge_schedule.show_swap import apply_show_swap, parse_schedule_anchor
+from binge_schedule.show_resolve import resolve_show
 from binge_schedule.grid import (
     day_dates,
     ensure_grids_workbooks_for_weeks,
@@ -978,6 +979,73 @@ def _display_name_for_archive_pick(cfg, sel: str) -> str:
     return cfg.shows[sel].display_name
 
 
+def _showdef_for_archive_pick(cfg, sel: str) -> Optional[ShowDef]:
+    tab = parse_workbook_tab_option(sel)
+    if tab is not None:
+        return synthetic_series_for_tab(tab)
+    return cfg.shows.get(sel)
+
+
+def _episode_rows_for_archive_pick(cfg, sel: str, nikki_path: Path) -> list[dict[str, Any]]:
+    sd = _showdef_for_archive_pick(cfg, sel)
+    if sd is None or sd.kind != "series" or not sd.nikki_sheet or not nikki_path.is_file():
+        return []
+    style = sd.nikki_style or nikki.default_style_for_sheet(sd.nikki_sheet)
+    hdrs = nikki.effective_column_headers(sd, style=style)
+    try:
+        return _archive_sheet_episodes(
+            str(nikki_path.resolve()),
+            _nikki_mtime(nikki_path),
+            sd.nikki_sheet,
+            style,
+            sd.prefix or "",
+            sd.nikki_row_filter,
+            json.dumps(asdict(hdrs), sort_keys=True),
+        )
+    except Exception:
+        return []
+
+
+def _episode_num_text(ep: dict[str, Any]) -> str:
+    for k in ("sheet_se", "se_compact", "ep_in_season", "code"):
+        v = ep.get(k)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s and s != "—":
+            return s
+    return ""
+
+
+def _slot_source_show_key(cfg, slot_show_text: str) -> Optional[str]:
+    key, sd = resolve_show(str(slot_show_text or ""), cfg.shows)
+    if sd is None or key == "literal":
+        return None
+    return key
+
+
+def _semantic_group_for_show(cfg, show_key: str) -> str:
+    sd = cfg.shows.get(show_key)
+    if sd is None:
+        return ""
+    return str(sd.semantic_group or "").strip().lower()
+
+
+def _semantic_candidates(cfg, *, group: str, kind: str, exclude_keys: set[str]) -> list[str]:
+    out: list[str] = []
+    for k, sd in cfg.shows.items():
+        if sd.kind != kind:
+            continue
+        if k in exclude_keys:
+            continue
+        g = str(sd.semantic_group or "").strip().lower()
+        if group and g != group:
+            continue
+        out.append(k)
+    out.sort(key=lambda k: cfg.shows[k].display_name.casefold())
+    return out
+
+
 def _grids_preview_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """Show blank cells in the GRIDS preview instead of ``None`` / ``nan`` text."""
 
@@ -1575,6 +1643,13 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     )
     oto_rows: list[dict[str, Any]] = []
     oto_pick: Optional[str] = None
+    oto_source_group = ""
+    oto_source_keys: set[str] = set()
+    oto_fill_mode = "Auto-populate matching genre show"
+    oto_episode_rows: list[dict[str, Any]] = []
+    oto_manual_pool: list[dict[str, Any]] = []
+    oto_manual_start_idx: Optional[int] = None
+    oto_manual_advance = True
     if use_oto:
         if not slot_ids:
             st.warning("No editable schedule blocks found in the selected weeks.")
@@ -1605,13 +1680,106 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 )
                 oto_ids = [sid for sid in oto_ids if sid in slot_by_id]
                 oto_rows = [slot_by_id[sid] for sid in oto_ids]
-            if archive_options:
-                oto_pick = st.selectbox(
-                    "New show in those time blocks",
-                    archive_options,
-                    format_func=_archive_pick_label,
-                    key="build_oto_pick",
+            if oto_rows:
+                oto_source_keys = {
+                    k for k in (_slot_source_show_key(cfg, r["show"]) for r in oto_rows) if k is not None
+                }
+                src_groups = [g for g in (_semantic_group_for_show(cfg, k) for k in oto_source_keys) if g]
+                if src_groups:
+                    oto_source_group = sorted(src_groups)[0]
+                    st.caption(f"Semantic source group: `{oto_source_group}`")
+            mode_opts = [
+                "Auto-populate matching genre show",
+                "Auto-populate matching genre movie/program",
+                "Manual: show > season > episode",
+            ]
+            oto_fill_mode = st.radio(
+                "OTO fill mode",
+                mode_opts,
+                horizontal=True,
+                key="build_oto_fill_mode",
+            )
+            if oto_fill_mode == "Manual: show > season > episode":
+                if archive_options:
+                    oto_pick = st.selectbox(
+                        "Manual show",
+                        archive_options,
+                        format_func=_archive_pick_label,
+                        key="build_oto_pick",
+                    )
+                if oto_pick:
+                    oto_episode_rows = _episode_rows_for_archive_pick(cfg, oto_pick, nikki)
+                    seasons_found = sorted({r["season"] for r in oto_episode_rows if r.get("season") is not None})
+                    season_opts: list[str] = ["All seasons"] + [f"Season {s}" for s in seasons_found]
+                    if any(r.get("season") is None for r in oto_episode_rows) and seasons_found:
+                        season_opts.append("Unnumbered / list order")
+                    pick_season = st.selectbox("Season", season_opts, key="build_oto_pick_season")
+
+                    def _manual_season_match(r: dict[str, Any]) -> bool:
+                        if pick_season == "All seasons":
+                            return True
+                        if pick_season.startswith("Season "):
+                            return r.get("season") == int(pick_season.replace("Season ", ""))
+                        if pick_season == "Unnumbered / list order":
+                            return r.get("season") is None
+                        return True
+
+                    oto_manual_pool = [r for r in oto_episode_rows if _manual_season_match(r)]
+                    if not oto_manual_pool:
+                        st.warning("No episodes match the chosen season filter.")
+                    else:
+                        idx_opts = list(range(len(oto_manual_pool)))
+                        oto_manual_start_idx = st.selectbox(
+                            "Episode",
+                            idx_opts,
+                            format_func=lambda i: (
+                                f"{oto_manual_pool[i].get('se_compact', '—')}  {oto_manual_pool[i].get('code', '—')}  —  "
+                                f"{str(oto_manual_pool[i].get('title', ''))[:140]}"
+                            ),
+                            key="build_oto_manual_episode_idx",
+                        )
+                        oto_manual_advance = st.checkbox(
+                            "Advance episodes across selected OTO blocks",
+                            value=True,
+                            key="build_oto_manual_advance",
+                        )
+            elif oto_fill_mode == "Auto-populate matching genre show":
+                auto_show_opts = _semantic_candidates(
+                    cfg,
+                    group=oto_source_group,
+                    kind="series",
+                    exclude_keys=oto_source_keys,
                 )
+                if not auto_show_opts:
+                    auto_show_opts = _semantic_candidates(cfg, group="", kind="series", exclude_keys=oto_source_keys)
+                if auto_show_opts:
+                    oto_pick = st.selectbox(
+                        "Matching genre replacement show",
+                        auto_show_opts,
+                        format_func=lambda k: f"{cfg.shows[k].display_name} ({cfg.shows[k].semantic_group or 'unlabeled'})",
+                        key="build_oto_pick_auto_show",
+                    )
+                    oto_episode_rows = _episode_rows_for_archive_pick(cfg, oto_pick, nikki)
+                else:
+                    st.warning("No related series candidates were found for auto-populate.")
+            else:
+                auto_movie_opts = _semantic_candidates(
+                    cfg,
+                    group=oto_source_group,
+                    kind="literal",
+                    exclude_keys=set(),
+                )
+                if not auto_movie_opts:
+                    auto_movie_opts = _semantic_candidates(cfg, group="", kind="literal", exclude_keys=set())
+                if auto_movie_opts:
+                    oto_pick = st.selectbox(
+                        "Matching genre replacement movie/program",
+                        auto_movie_opts,
+                        format_func=lambda k: f"{cfg.shows[k].display_name} ({cfg.shows[k].semantic_group or 'unlabeled'})",
+                        key="build_oto_pick_auto_movie",
+                    )
+                else:
+                    st.warning("No related movie/program candidates were found for auto-populate.")
 
     use_mass = st.checkbox(
         "Apply mass changes and persist to source schedule files",
@@ -1697,7 +1865,9 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     if use_oto:
         oto_dur = _format_duration_minutes(sum(int(r["duration_minutes"]) for r in oto_rows)) if oto_rows else "0m"
         oto_name = _display_name_for_archive_pick(cfg, oto_pick) if oto_pick else "—"
-        st.markdown(f"- OTO: **{len(oto_rows)}** block(s), duration **{oto_dur}**, replacement **{oto_name}**")
+        st.markdown(
+            f"- OTO: **{len(oto_rows)}** block(s), duration **{oto_dur}**, replacement **{oto_name}**, mode **{oto_fill_mode}**"
+        )
     else:
         st.markdown("- OTO: none")
     if use_mass:
@@ -1712,6 +1882,11 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     preflight_issues: list[str] = []
     if use_oto and (not oto_rows or not oto_pick):
         preflight_issues.append("OTO is enabled but block selection and/or replacement show is missing.")
+    if use_oto and oto_fill_mode == "Manual: show > season > episode":
+        if not oto_manual_pool or oto_manual_start_idx is None:
+            preflight_issues.append("OTO manual mode requires a season and episode selection.")
+    if use_oto and oto_fill_mode == "Auto-populate matching genre show" and not oto_episode_rows:
+        preflight_issues.append("OTO auto-related-show requires a series with parsed episode rows.")
     if use_mass and (not mass_rows or not mass_pick):
         preflight_issues.append("Mass is enabled but block selection and/or replacement show is missing.")
     if use_mass and not st.session_state.get("build_mass_confirm"):
@@ -1747,9 +1922,69 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 can_run = False
             else:
                 oto_display = _display_name_for_archive_pick(cfg, oto_pick)
-                for row in oto_rows:
+                ordered_oto_rows = sorted(oto_rows, key=lambda r: (r["date_iso"], int(r["start_slot"])))
+                # Build one replacement payload per selected slot using manual or auto fill mode.
+                episode_plan: list[tuple[str, str, str]] = []
+                if oto_fill_mode == "Auto-populate matching genre movie/program":
+                    episode_plan = [("MOVIE", "MOVIE", oto_display)] * len(ordered_oto_rows)
+                else:
+                    pool = list(oto_episode_rows)
+                    if oto_fill_mode == "Manual: show > season > episode":
+                        pool = list(oto_manual_pool)
+                    if not pool:
+                        st.error("OTO episode pool is empty for this mode.")
+                        can_run = False
+                    else:
+                        pool.sort(key=lambda r: int(r.get("idx0", 0)))
+                        if oto_fill_mode == "Manual: show > season > episode" and oto_manual_start_idx is not None:
+                            start_idx = int(oto_manual_start_idx)
+                            if oto_manual_advance:
+                                for i, _ in enumerate(ordered_oto_rows):
+                                    ep = pool[(start_idx + i) % len(pool)]
+                                    episode_plan.append(
+                                        (
+                                            str(ep.get("code") or ""),
+                                            _episode_num_text(ep),
+                                            str(ep.get("title") or ""),
+                                        )
+                                    )
+                            else:
+                                ep = pool[start_idx]
+                                episode_plan = [
+                                    (
+                                        str(ep.get("code") or ""),
+                                        _episode_num_text(ep),
+                                        str(ep.get("title") or ""),
+                                    )
+                                ] * len(ordered_oto_rows)
+                        else:
+                            sd_auto = _showdef_for_archive_pick(cfg, oto_pick)
+                            start_cursor = int(getattr(sd_auto, "start_episode_index", 0) or 0) if sd_auto else 0
+                            start_idx = 0
+                            for i, ep in enumerate(pool):
+                                if int(ep.get("idx0", i)) >= start_cursor:
+                                    start_idx = i
+                                    break
+                            for i, _ in enumerate(ordered_oto_rows):
+                                ep = pool[(start_idx + i) % len(pool)]
+                                episode_plan.append(
+                                    (
+                                        str(ep.get("code") or ""),
+                                        _episode_num_text(ep),
+                                        str(ep.get("title") or ""),
+                                    )
+                                )
+
+                for i, row in enumerate(ordered_oto_rows):
                     st_norm = parse_flexible_time(str(row["start"]))
                     fin_norm = parse_flexible_time(str(row["finish"]))
+                    ep_code, ep_num, ep_title = episode_plan[i] if i < len(episode_plan) else ("", "", "")
+                    if not ep_code and oto_fill_mode != "Auto-populate matching genre movie/program":
+                        ep_code = oto_display
+                    if not ep_num and oto_fill_mode != "Auto-populate matching genre movie/program":
+                        ep_num = ep_code
+                    if not ep_title:
+                        ep_title = oto_display
                     oto_overrides.append(
                         BingeRowOverride(
                             match_date=row["date"],
@@ -1757,10 +1992,10 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                             new_date=row["date"],
                             new_start=st_norm,
                             new_finish=fin_norm,
-                            new_episode=oto_display,
+                            new_episode=ep_code,
                             new_show=oto_display,
-                            new_episode_num=oto_display,
-                            new_episode_name=oto_display,
+                            new_episode_num=ep_num,
+                            new_episode_name=ep_title,
                         )
                     )
 

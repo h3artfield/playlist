@@ -75,6 +75,8 @@ def _showdef_to_yaml_dict(sd: ShowDef) -> dict[str, Any]:
         d["overnight_repeat_after"] = sd.overnight_repeat_after
     if sd.binge_row_minutes != 30:
         d["binge_row_minutes"] = sd.binge_row_minutes
+    if sd.semantic_group:
+        d["semantic_group"] = sd.semantic_group
     return d
 
 

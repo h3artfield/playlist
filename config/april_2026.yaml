@@ -38,6 +38,7 @@ shows:
   jim_bowie:
     display_name: "The Adventures of Jim Bowie"
     kind: series
+    semantic_group: western
     nikki_sheet: "2025 JIM BOWIE"
     prefix: AJB
     start_episode_index: 60
@@ -46,6 +47,7 @@ shows:
   texan:
     display_name: "The Texan"
     kind: series
+    semantic_group: western
     nikki_sheet: "The Texan - Note - missing epis"
     prefix: TEX
     # 30-minute episodes (one BINGE row per half-hour). Some April BINGE rows have bad end times — source typo, not 2h.
@@ -53,6 +55,7 @@ shows:
   hunter:
     display_name: "Hunter"
     kind: series
+    semantic_group: action_drama
     nikki_sheet: "Hunter"
     prefix: HUN
     # April BINGE: one row per clock hour per episode (not two half-hour rows).
@@ -62,6 +65,7 @@ shows:
   renegade:
     display_name: "Renegade"
     kind: series
+    semantic_group: action_drama
     nikki_sheet: "Renegade"
     prefix: REN
     binge_row_minutes: 60
@@ -70,6 +74,7 @@ shows:
   carol_burnett:
     display_name: "The Carol Burnett Show"
     kind: series
+    semantic_group: comedy_variety
     nikki_sheet: "Carol Burnett - NOTE - EPISODE "
     prefix: CBS
     binge_row_minutes: 60
@@ -80,6 +85,7 @@ shows:
   mst3k:
     display_name: "Mystery Science Theater 3000"
     kind: series
+    semantic_group: cult_movie
     nikki_sheet: "MST3K - NOTE - Each episode fol"
     prefix: MST
     # April BINGE: one row per 2-hour episode block.
@@ -87,6 +93,7 @@ shows:
   real_mccoys:
     display_name: "The Real McCoys"
     kind: series
+    semantic_group: western
     nikki_sheet: "Real McCoys - NOTE - Each Seaso"
     prefix: MCC
     # Mon–Sat morning: prior 18:00–22:00 → 0:00–4:00; prior 22:00–24:00 → 4:00–6:00. No Sat→Sun repeat:
@@ -97,6 +104,7 @@ shows:
   jump_street:
     display_name: "21 Jump Street"
     kind: series
+    semantic_group: action_drama
     nikki_sheet: "21 Jump Street"
     prefix: JMP
     # April BINGE: one row per hour (e.g. 4:00–5:00), one episode per row.
@@ -104,24 +112,28 @@ shows:
   saint:
     display_name: "The Saint"
     kind: series
+    semantic_group: action_adventure
     nikki_sheet: "The Saint - NOTE - Episode titl"
     prefix: SNT
     binge_row_minutes: 60
   laugh_in:
     display_name: "Rowan & Martin's Laugh-In"
     kind: series
+    semantic_group: comedy_variety
     nikki_sheet: "Laugh-In - NOTE - CC Files are "
     prefix: RML
     binge_row_minutes: 60
   lucy:
     display_name: "The Lucy Show"
     kind: series
+    semantic_group: comedy_variety
     nikki_sheet: "Lucy Show"
     prefix: LUC
     nikki_style: generic
   tim_conway:
     display_name: "The Tim Conway Comedy Hour"
     kind: series
+    semantic_group: comedy_variety
     nikki_sheet: "Tim Conway Comedy Hour - Note -"
     prefix: TCC
     binge_row_minutes: 60
@@ -130,39 +142,51 @@ shows:
   paid_programming:
     display_name: "Paid Programming"
     kind: literal
+    semantic_group: ministry
   perry_stone:
     display_name: "Perry Stone"
     kind: literal
+    semantic_group: ministry
   sacred_name:
     display_name: "Sacred Name"
     kind: literal
+    semantic_group: ministry
   les_feldick:
     display_name: "Les Feldick Ministries"
     kind: literal
+    semantic_group: ministry
   healthy_christian:
     display_name: "The Healthy Christian with Rich Stocks"
     kind: literal
+    semantic_group: ministry
   michael_youssef:
     display_name: "Michael Youssef"
     kind: literal
+    semantic_group: ministry
   micheal_youssef:
     display_name: "Micheal Youssef"
     kind: literal
+    semantic_group: ministry
   awakening:
     display_name: "The Awakening Hour"
     kind: literal
+    semantic_group: ministry
   time_for_hope:
     display_name: "Time for Hope"
     kind: literal
+    semantic_group: ministry
   rejoyce:
     display_name: "Rejoyce in Jesus"
     kind: literal
+    semantic_group: ministry
   postcard_travel:
     display_name: "Post Card Travel TV"
     kind: literal
+    semantic_group: travel_lifestyle
   jet_set:
     display_name: "The Jet Set"
     kind: literal
+    semantic_group: travel_lifestyle
 
 weeks:
   - monday: "2026-04-06"

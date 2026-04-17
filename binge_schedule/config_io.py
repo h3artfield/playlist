@@ -136,6 +136,11 @@ def _show_from_dict(key: str, d: dict[str, Any]) -> ShowDef:
         overnight_repeat_morning_weekdays=_morning_weekdays_from_yaml(d.get("overnight_repeat_morning_weekdays")),
         repeat_previous_slot_when_unmapped=bool(d.get("repeat_previous_slot_when_unmapped", False)),
         binge_row_minutes=_binge_row_minutes_from_yaml(d.get("binge_row_minutes")),
+        semantic_group=(
+            str(d["semantic_group"]).strip().lower()
+            if d.get("semantic_group") is not None and str(d.get("semantic_group")).strip()
+            else None
+        ),
     )
 
 

@@ -83,6 +83,8 @@ class ShowDef:
     # BINGE row duration: ``30`` (default) = one row per half-hour episode; ``60`` = one row per clock hour;
     # ``120`` = one row per two-hour block (e.g. MST3K). Must match the grids / April intent (reference BINGE can have typos).
     binge_row_minutes: int = 30
+    # Optional semantic grouping label used by UI auto-fill recommendations (e.g. western, comedy, ministry, travel).
+    semantic_group: Optional[str] = None
 
 
 @dataclass
