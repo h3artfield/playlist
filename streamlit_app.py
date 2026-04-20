@@ -2702,8 +2702,9 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     st.markdown(
         "\n".join(
             [
-                f"- Build window: **{start_date.isoformat()}** + **{len(selected_weeks)}** week(s)",
-                f"- Weeks: {', '.join(f'`{w.monday}`' for w in selected_weeks)}",
+                f"- Start date: **{start_date.isoformat()}**",
+                f"- Duration: **{len(selected_weeks)}** week(s)",
+                f"- Week starts: {', '.join(f'`{w.monday}`' for w in selected_weeks)}",
             ]
         )
     )
