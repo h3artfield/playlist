@@ -1161,6 +1161,28 @@ def _movie_program_picker_options(
     return uniq
 
 
+def _literal_options_from_slots(cfg, slots: list[dict[str, Any]]) -> list[str]:
+    """Distinct literal show labels discovered in schedule slots."""
+    opts: list[str] = []
+    seen: set[str] = set()
+    for row in slots:
+        show_text = str(row.get("show", "")).strip()
+        if not show_text:
+            continue
+        _, sd = resolve_show(show_text, cfg.shows)
+        if sd is not None and sd.kind == "series":
+            continue
+        if sd is not None and sd.kind == "literal" and show_text == sd.display_name.strip():
+            continue
+        token = _literal_text_option(show_text)
+        if token in seen:
+            continue
+        seen.add(token)
+        opts.append(token)
+    opts.sort(key=lambda opt: _display_name_for_archive_pick(cfg, opt).casefold())
+    return opts
+
+
 def _grids_preview_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """Show blank cells in the GRIDS preview instead of ``None`` / ``nan`` text."""
 
@@ -1451,8 +1473,10 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
         tabs = _nikki_workbook_sheet_names(str(nikki_path.resolve()), _nikki_mtime(nikki_path))
         extra_tab_names = workbook_tabs_not_in_yaml(cfg, tabs)
     extra_opts = [workbook_tab_option(t) for t in extra_tab_names]
+    slot_rows, _slot_warn = _schedule_template_slots(cfg.weeks)
+    slot_literal_opts = _literal_options_from_slots(cfg, slot_rows)
 
-    all_option_keys = yaml_keys + extra_opts
+    all_option_keys = yaml_keys + extra_opts + slot_literal_opts
     archive_view = st.radio(
         "Archive view",
         ("All", "Shows (series)", "Movies/programs"),
