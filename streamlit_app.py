@@ -1078,7 +1078,14 @@ def _grids_preview_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return dfc.applymap(_cell)  # type: ignore[attr-defined]
 
 
-def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
+def _render_binge_grids_preview(
+    *,
+    key_prefix: str,
+    show_swap: bool,
+    cfg=None,
+    cfg_path: Optional[Path] = None,
+    nikki_path: Optional[Path] = None,
+) -> None:
     """In-page tables from the last generated BINGE / BINGE GRIDS in session (optional swap → archive)."""
     if "binge_path" not in st.session_state or "grids_path" not in st.session_state:
         return
@@ -1122,6 +1129,7 @@ def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
         st.markdown("###### BINGE")
         show_col = _find_binge_column_ci(binge_df, "SHOW")
         picked_row_idx: Optional[int] = None
+        picked_row_indices: list[int] = []
 
         if show_swap and show_col and len(binge_df) > 0:
             sel_supported = _dataframe_row_selection_supported()
@@ -1133,7 +1141,7 @@ def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
                     height=340,
                     hide_index=True,
                     on_select="rerun",
-                    selection_mode="single-row",
+                    selection_mode="multi-row",
                     key=df_key,
                 )
                 rows_sel: list[int] = []
@@ -1141,6 +1149,7 @@ def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
                     rows_sel = list(event["selection"]["rows"])  # type: ignore[index]
                 except (KeyError, TypeError, AttributeError):
                     pass
+                picked_row_indices = [int(i) for i in rows_sel if isinstance(i, int) and 0 <= int(i) < len(binge_df)]
                 if rows_sel:
                     try:
                         picked_row_idx = int(rows_sel[0])
@@ -1162,6 +1171,7 @@ def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
                         key=f"{key_prefix}_binge_row_fallback",
                     )
                 )
+                picked_row_indices = [picked_row_idx]
 
             st.markdown("###### Change a show")
             st.info(
@@ -1176,6 +1186,89 @@ def _render_binge_grids_preview(*, key_prefix: str, show_swap: bool) -> None:
                 st.caption(f"**Selected row {picked_row_idx + 1} · SHOW:** {show_val or '—'}")
             else:
                 st.caption("**No row selected yet** — click a row in the table above.")
+
+            if cfg is not None and cfg_path is not None and nikki_path is not None:
+                st.markdown("###### Block swap")
+                if picked_row_indices:
+                    st.caption(
+                        f"Assign replacements for **{len(picked_row_indices)}** selected row(s), then apply all at once."
+                    )
+                    yaml_keys = sorted(cfg.shows.keys(), key=lambda k: cfg.shows[k].display_name.lower())
+                    extra_tab_names: list[str] = []
+                    if nikki_path.is_file():
+                        tabs = _nikki_workbook_sheet_names(str(nikki_path.resolve()), _nikki_mtime(nikki_path))
+                        extra_tab_names = workbook_tabs_not_in_yaml(cfg, tabs)
+                    option_keys = yaml_keys + [workbook_tab_option(t) for t in extra_tab_names]
+
+                    def _opt_label(opt: str) -> str:
+                        tab = parse_workbook_tab_option(opt)
+                        if tab is not None:
+                            return f"{tab} _(not on schedule)_"
+                        return cfg.shows[opt].display_name
+
+                    for idx in sorted(picked_row_indices):
+                        row = binge_df.iloc[idx]
+                        sv = row[show_col]
+                        show_val = str(sv).strip() if pd.notna(sv) else ""
+                        st.selectbox(
+                            f"Row {idx + 1}: {show_val or '—'}",
+                            option_keys,
+                            format_func=_opt_label,
+                            key=f"{key_prefix}_block_pick_{idx}",
+                        )
+
+                    if st.button(
+                        "Apply block swap to selected rows",
+                        type="primary",
+                        use_container_width=True,
+                        key=f"{key_prefix}_apply_block_swap",
+                    ):
+                        applied = 0
+                        all_msgs: list[str] = []
+                        first_anchor: Optional[dict[str, Any]] = None
+                        for idx in sorted(picked_row_indices):
+                            pick = st.session_state.get(f"{key_prefix}_block_pick_{idx}")
+                            if not pick:
+                                all_msgs.append(f"Row {idx + 1}: no replacement selected.")
+                                continue
+                            sv = binge_df.iloc[idx][show_col]
+                            show_val = str(sv).strip() if pd.notna(sv) else ""
+                            if not show_val:
+                                all_msgs.append(f"Row {idx + 1}: no SHOW value.")
+                                continue
+                            anchor_dict = _schedule_anchor_dict_from_binge_row(binge_df, idx)
+                            if anchor_dict is None:
+                                all_msgs.append(f"Row {idx + 1}: missing DATE/START TIME anchor.")
+                                continue
+                            ok, swap_msgs = apply_show_swap(
+                                cfg_path,
+                                [show_val],
+                                str(pick),
+                                schedule_anchor=anchor_dict,
+                            )
+                            all_msgs.extend([f"Row {idx + 1}: {m}" for m in swap_msgs])
+                            if ok:
+                                applied += 1
+                                if first_anchor is None:
+                                    first_anchor = anchor_dict
+                        auto_ok = False
+                        if applied > 0 and first_anchor is not None:
+                            r_ok, r_msgs, paths = _regenerate_binge_for_month(cfg_path, first_anchor)
+                            all_msgs.extend(r_msgs)
+                            if r_ok and paths:
+                                bp, gp, od = paths
+                                st.session_state["binge_path"] = bp
+                                st.session_state["grids_path"] = gp
+                                st.session_state["out_dir"] = od
+                                auto_ok = True
+                        st.session_state["swap_result"] = {
+                            "summary": f"Applied block swap to **{applied}** row(s).",
+                            "messages": all_msgs,
+                            "auto_export_ok": auto_ok,
+                        }
+                        st.rerun()
+                else:
+                    st.caption("Select one or more BINGE rows above to enable block swap.")
 
             if st.button(
                 "Swap for… → View content archive",
@@ -1490,7 +1583,9 @@ def _schedule_workbook_candidates(cfg_path: Path) -> list[Path]:
 def _render_schedule_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
     sr = st.session_state.get("swap_result")
     if sr:
-        if sr.get("auto_export_ok"):
+        if sr.get("summary"):
+            st.success(str(sr.get("summary")))
+        elif sr.get("auto_export_ok"):
             st.success(
                 f"**Grids updated** and **BINGE files regenerated** for that month: **{', '.join(sr['old_show_labels'])}** → "
                 f"**{sr['new_display']}** (`{sr['archive_pick']}`). Downloads below are the new **BINGE.xlsx** / **BINGE GRIDS.xlsx**."
@@ -1574,7 +1669,13 @@ def _render_schedule_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
     else:
         st.markdown("##### Latest files")
         _render_last_build_outputs(cfg, cfg_path)
-        _render_binge_grids_preview(key_prefix="schedule", show_swap=True)
+        _render_binge_grids_preview(
+            key_prefix="schedule",
+            show_swap=True,
+            cfg=cfg,
+            cfg_path=cfg_path,
+            nikki_path=nikki_path,
+        )
 
     st.divider()
     st.markdown("##### Make changes")
