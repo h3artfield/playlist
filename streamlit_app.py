@@ -940,33 +940,39 @@ def _map_output_grid_tabs_by_monday(grids_path: Path) -> dict[str, str]:
     return out
 
 
-def _remerge_output_grid_day_column(ws: Any, col: int) -> None:
-    """Rebuild vertical merges for one day column in rows 5..52."""
-    min_row, max_row = 5, 52
-    # Remove existing merges that touch this day column in the schedule row band.
+def _write_output_grid_merged_run(ws: Any, col: int, row_start: int, row_end: int, new_display: str) -> None:
+    """Write one replacement run and only adjust merges that overlap this run."""
+    if row_end < row_start:
+        return
     for mr in list(ws.merged_cells.ranges):
-        if mr.max_row < min_row or mr.min_row > max_row:
+        if mr.max_col != mr.min_col or mr.min_col != col:
             continue
-        if mr.min_col <= col <= mr.max_col:
-            ws.unmerge_cells(str(mr))
-
-    def _norm(v: Any) -> str:
-        if v is None:
-            return ""
-        s = str(v).strip()
-        return s
-
-    r = min_row
-    while r <= max_row:
-        cur = _norm(ws.cell(row=r, column=col).value)
-        end = r
-        while end + 1 <= max_row and _norm(ws.cell(row=end + 1, column=col).value) == cur:
-            end += 1
-        if cur and end > r:
-            for rr in range(r + 1, end + 1):
+        if mr.max_row < row_start or mr.min_row > row_end:
+            continue
+        top_val = ws.cell(row=mr.min_row, column=col).value
+        old_start, old_end = int(mr.min_row), int(mr.max_row)
+        ws.unmerge_cells(str(mr))
+        # Preserve upper untouched section of the old merged block.
+        if old_start < row_start:
+            ws.cell(row=old_start, column=col, value=top_val)
+            for rr in range(old_start + 1, row_start):
                 ws.cell(row=rr, column=col, value=None)
-            ws.merge_cells(start_row=r, start_column=col, end_row=end, end_column=col)
-        r = end + 1
+            if row_start - 1 > old_start:
+                ws.merge_cells(start_row=old_start, start_column=col, end_row=row_start - 1, end_column=col)
+        # Preserve lower untouched section of the old merged block.
+        if old_end > row_end:
+            low_start = row_end + 1
+            ws.cell(row=low_start, column=col, value=top_val)
+            for rr in range(low_start + 1, old_end + 1):
+                ws.cell(row=rr, column=col, value=None)
+            if old_end > low_start:
+                ws.merge_cells(start_row=low_start, start_column=col, end_row=old_end, end_column=col)
+
+    ws.cell(row=row_start, column=col, value=new_display)
+    for rr in range(row_start + 1, row_end + 1):
+        ws.cell(row=rr, column=col, value=None)
+    if row_end > row_start:
+        ws.merge_cells(start_row=row_start, start_column=col, end_row=row_end, end_column=col)
 
 
 def _apply_output_grid_slot_replacements(
@@ -987,7 +993,7 @@ def _apply_output_grid_slot_replacements(
     except OSError as e:
         return [f"OTO grids update skipped: could not open `{grids_path}` ({e})."]
     changed = 0
-    touched_cols_by_tab: dict[str, set[int]] = {}
+    runs: list[tuple[str, int, int, int, str]] = []
     try:
         for r in slot_rows:
             d = r["date"]
@@ -995,18 +1001,28 @@ def _apply_output_grid_slot_replacements(
             tab = tab_by_monday.get(mon_key)
             if not tab or tab not in wb.sheetnames:
                 continue
-            ws = wb[tab]
             col = 2 + int(r["day_index"])
-            touched_cols_by_tab.setdefault(tab, set()).add(col)
-            for slot in range(int(r["start_slot"]), int(r["end_slot"])):
-                ws.cell(row=5 + slot, column=col, value=new_display)
-                changed += 1
-        for tab, cols in touched_cols_by_tab.items():
+            row_start = 5 + int(r["start_slot"])
+            row_end = 5 + int(r["end_slot"]) - 1
+            runs.append((tab, col, row_start, row_end, new_display))
+            changed += max(0, row_end - row_start + 1)
+        runs.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4]))
+        merged_runs: list[tuple[str, int, int, int, str]] = []
+        for run in runs:
+            if not merged_runs:
+                merged_runs.append(run)
+                continue
+            p_tab, p_col, p_start, p_end, p_disp = merged_runs[-1]
+            c_tab, c_col, c_start, c_end, c_disp = run
+            if c_tab == p_tab and c_col == p_col and c_disp == p_disp and c_start <= p_end + 1:
+                merged_runs[-1] = (p_tab, p_col, p_start, max(p_end, c_end), p_disp)
+            else:
+                merged_runs.append(run)
+        for tab, col, row_start, row_end, disp in merged_runs:
             if tab not in wb.sheetnames:
                 continue
             ws = wb[tab]
-            for col in cols:
-                _remerge_output_grid_day_column(ws, col)
+            _write_output_grid_merged_run(ws, col, row_start, row_end, disp)
         wb.save(grids_path)
     finally:
         wb.close()
@@ -1032,7 +1048,7 @@ def _apply_output_grid_slot_replacements_multi(
     except OSError as e:
         return [f"OTO grids update skipped: could not open `{grids_path}` ({e})."]
     changed = 0
-    touched_cols_by_tab: dict[str, set[int]] = {}
+    runs: list[tuple[str, int, int, int, str]] = []
     try:
         for i, r in enumerate(slot_rows):
             if i >= len(new_displays):
@@ -1045,18 +1061,28 @@ def _apply_output_grid_slot_replacements_multi(
             tab = tab_by_monday.get(mon_key)
             if not tab or tab not in wb.sheetnames:
                 continue
-            ws = wb[tab]
             col = 2 + int(r["day_index"])
-            touched_cols_by_tab.setdefault(tab, set()).add(col)
-            for slot in range(int(r["start_slot"]), int(r["end_slot"])):
-                ws.cell(row=5 + slot, column=col, value=new_display)
-                changed += 1
-        for tab, cols in touched_cols_by_tab.items():
+            row_start = 5 + int(r["start_slot"])
+            row_end = 5 + int(r["end_slot"]) - 1
+            runs.append((tab, col, row_start, row_end, new_display))
+            changed += max(0, row_end - row_start + 1)
+        runs.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4]))
+        merged_runs: list[tuple[str, int, int, int, str]] = []
+        for run in runs:
+            if not merged_runs:
+                merged_runs.append(run)
+                continue
+            p_tab, p_col, p_start, p_end, p_disp = merged_runs[-1]
+            c_tab, c_col, c_start, c_end, c_disp = run
+            if c_tab == p_tab and c_col == p_col and c_disp == p_disp and c_start <= p_end + 1:
+                merged_runs[-1] = (p_tab, p_col, p_start, max(p_end, c_end), p_disp)
+            else:
+                merged_runs.append(run)
+        for tab, col, row_start, row_end, disp in merged_runs:
             if tab not in wb.sheetnames:
                 continue
             ws = wb[tab]
-            for col in cols:
-                _remerge_output_grid_day_column(ws, col)
+            _write_output_grid_merged_run(ws, col, row_start, row_end, disp)
         wb.save(grids_path)
     finally:
         wb.close()
