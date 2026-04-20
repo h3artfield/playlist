@@ -2428,6 +2428,8 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     oto_manual_start_idx: Optional[int] = None
     oto_manual_advance = True
     oto_movie_by_slot: dict[str, str] = {}
+    oto_auto_movie_by_slot: dict[str, str] = {}
+    oto_auto_movie_plan_texts: list[str] = []
     oto_movie_fill_rule = "Sequential by slot"
     oto_timing_notes: list[str] = []
     if use_oto:
@@ -2793,18 +2795,80 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                     oto_source_group,
                 )
                 if auto_movie_opts:
-                    oto_pick = auto_movie_opts[0]
-                    pick_group = (
-                        _semantic_group_for_archive_option(
-                            cfg,
-                            oto_pick,
-                            _movie_semantic_groups(str(cfg_path.resolve())),
+                    runtime_map = _movie_runtime_minutes(str(cfg_path.resolve()))
+                    commercials_pct = 30.0
+                    fallback_runtime = 95
+                    by_date: dict[str, list[dict[str, Any]]] = {}
+                    for r in sorted(oto_rows, key=lambda rr: (rr["date_iso"], int(rr["start_slot"]))):
+                        by_date.setdefault(str(r["date_iso"]), []).append(r)
+
+                    def _build_auto_plan(rows_for_day: list[dict[str, Any]]) -> list[str]:
+                        if not rows_for_day:
+                            return []
+                        content_per_slot = 30.0 * max(0.05, (1.0 - commercials_pct / 100.0))
+                        target_content = len(rows_for_day) * content_per_slot
+                        selected: list[str] = []
+                        total_rt = 0
+                        for opt in auto_movie_opts:
+                            rt = _runtime_for_archive_option(cfg, opt, runtime_map) or fallback_runtime
+                            selected.append(opt)
+                            total_rt += int(rt)
+                            # Keep adding titles until content estimate fills the selected window.
+                            if total_rt >= target_content and len(selected) >= 1:
+                                break
+                        if len(rows_for_day) >= 6 and len(selected) == 1 and len(auto_movie_opts) > 1:
+                            selected.append(auto_movie_opts[1])
+                        return selected
+
+                    for d, rows_for_day in by_date.items():
+                        seq_opts = _build_auto_plan(rows_for_day)
+                        if not seq_opts:
+                            continue
+                        content_per_slot = 30.0 * max(0.05, (1.0 - commercials_pct / 100.0))
+                        raw_weights = [
+                            max(1.0, float(_runtime_for_archive_option(cfg, opt, runtime_map) or fallback_runtime) / content_per_slot)
+                            for opt in seq_opts
+                        ]
+                        total_weight = sum(raw_weights) or float(len(seq_opts))
+                        scaled = [w * len(rows_for_day) / total_weight for w in raw_weights]
+                        counts = [max(1, int(v)) for v in scaled]
+                        while sum(counts) > len(rows_for_day):
+                            i_max = max(range(len(counts)), key=lambda i: counts[i])
+                            if counts[i_max] > 1:
+                                counts[i_max] -= 1
+                            else:
+                                break
+                        while sum(counts) < len(rows_for_day):
+                            frac = [scaled[i] - int(scaled[i]) for i in range(len(scaled))]
+                            i_best = max(range(len(counts)), key=lambda i: frac[i])
+                            counts[i_best] += 1
+
+                        idx = 0
+                        for i_pick, opt in enumerate(seq_opts):
+                            for _ in range(counts[i_pick]):
+                                if idx >= len(rows_for_day):
+                                    break
+                                sid = str(rows_for_day[idx]["slot_id"])
+                                oto_auto_movie_by_slot[sid] = opt
+                                idx += 1
+                        oto_timing_notes.extend(
+                            _runtime_timing_notes_for_day(
+                                cfg=cfg,
+                                day_iso=d,
+                                rows_for_day=rows_for_day,
+                                assigned_by_slot=oto_auto_movie_by_slot,
+                                runtime_map=runtime_map,
+                                fallback_runtime=fallback_runtime,
+                                commercials_pct=commercials_pct,
+                            )
                         )
-                        or "unlabeled"
-                    )
-                    st.caption(
-                        f"Auto-picked matching genre movie/program: **{_display_name_for_archive_pick(cfg, oto_pick)}** (`{pick_group}`)."
-                    )
+                        oto_auto_movie_plan_texts.append(
+                            f"{d}: " + " -> ".join(_display_name_for_archive_pick(cfg, opt) for opt in seq_opts)
+                        )
+                    if oto_auto_movie_plan_texts:
+                        st.caption("Auto movie plan: " + " | ".join(oto_auto_movie_plan_texts))
+                    if auto_movie_opts:
+                        oto_pick = auto_movie_opts[0]
                 else:
                     st.warning("No related movie/program candidates were found for auto-populate.")
 
@@ -2961,6 +3025,12 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
             assigned = [oto_movie_by_slot.get(str(r["slot_id"])) for r in sorted(oto_rows, key=lambda r: (r["date_iso"], int(r["start_slot"])))]
             assigned = [a for a in assigned if a]
             oto_name = f"{len(assigned)} assigned block(s)" if assigned else "—"
+        elif oto_fill_mode == "Auto-populate matching genre movie/program":
+            oto_name = (
+                f"{len(oto_auto_movie_plan_texts)} day plan(s)"
+                if oto_auto_movie_plan_texts
+                else (_display_name_for_archive_pick(cfg, oto_pick) if oto_pick else "—")
+            )
         else:
             oto_name = _display_name_for_archive_pick(cfg, oto_pick) if oto_pick else "—"
         st.markdown(
@@ -2989,6 +3059,12 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
             preflight_issues.append("OTO manual mode requires a season and episode selection.")
     if use_oto and oto_fill_mode == "Auto-populate matching genre show" and not oto_episode_rows:
         preflight_issues.append("OTO auto-related-show requires a series with parsed episode rows.")
+    if use_oto and oto_fill_mode == "Auto-populate matching genre movie/program":
+        missing_auto_movie_slots = [r for r in oto_rows if not oto_auto_movie_by_slot.get(str(r["slot_id"]))]
+        if missing_auto_movie_slots:
+            preflight_issues.append(
+                f"OTO auto-movie mode could not plan replacements for {len(missing_auto_movie_slots)} selected block(s)."
+            )
     if use_oto and oto_fill_mode == "Replace time window with movie list":
         if not oto_rows:
             preflight_issues.append("OTO movie-list mode requires selected time blocks.")
@@ -3044,13 +3120,25 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                         for row in ordered_oto_rows:
                             show_key = str(oto_movie_by_slot[str(row["slot_id"])])
                             oto_grid_displays.append(_display_name_for_archive_pick(cfg, show_key))
+                elif oto_fill_mode == "Auto-populate matching genre movie/program":
+                    missing_rows = [r for r in ordered_oto_rows if not oto_auto_movie_by_slot.get(str(r["slot_id"]))]
+                    if missing_rows:
+                        st.error(
+                            f"OTO auto-movie mode is missing replacements for {len(missing_rows)} selected block(s)."
+                        )
+                        can_run = False
+                    else:
+                        for row in ordered_oto_rows:
+                            show_key = str(oto_auto_movie_by_slot[str(row["slot_id"])])
+                            oto_grid_displays.append(_display_name_for_archive_pick(cfg, show_key))
                 else:
                     oto_display = _display_name_for_archive_pick(cfg, oto_pick)
                     oto_grid_displays = [oto_display] * len(ordered_oto_rows)
                 # Build one replacement payload per selected slot using manual or auto fill mode.
                 episode_plan: list[tuple[str, str, str, str]] = []
                 if oto_fill_mode == "Auto-populate matching genre movie/program":
-                    episode_plan = [("MOVIE", "MOVIE", oto_display, oto_display)] * len(ordered_oto_rows)
+                    for title in oto_grid_displays:
+                        episode_plan.append(("MOVIE", "MOVIE", title, title))
                 elif oto_fill_mode == "Replace time window with movie list":
                     for title in oto_grid_displays:
                         episode_plan.append(("MOVIE", "MOVIE", title, title))
