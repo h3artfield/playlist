@@ -1465,6 +1465,28 @@ def _render_last_build_outputs(cfg, cfg_path: Path) -> None:
         st.caption(f"Wrap when a show runs out: **{cfg.wrap_episodes}**")
 
 
+def _schedule_workbook_candidates(cfg_path: Path) -> list[Path]:
+    """Candidate BINGE/GRIDS workbooks users can load in Edit schedules."""
+    cfg_dir = cfg_path.resolve().parent
+    repo_root = cfg_dir.parent if cfg_dir.name.casefold() == "config" else cfg_dir
+    roots = [repo_root / "data", repo_root / "out"]
+    out: list[Path] = []
+    seen: set[str] = set()
+    for r in roots:
+        if not r.is_dir():
+            continue
+        for p in sorted(r.glob("*.xlsx"), key=lambda x: x.name.casefold()):
+            nm = p.name
+            if nm.startswith("~$") or nm.endswith(".xlsx~"):
+                continue
+            rp = str(p.resolve())
+            if rp in seen:
+                continue
+            seen.add(rp)
+            out.append(Path(rp))
+    return out
+
+
 def _render_schedule_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
     sr = st.session_state.get("swap_result")
     if sr:
@@ -1498,6 +1520,48 @@ def _render_schedule_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
         "Your latest export is here and on **Build schedule**. Below: pick the **BINGE row** to replace, then choose the **archive** show — "
         "**clock times stay put**; grids update for the next build."
     )
+    candidates = _schedule_workbook_candidates(cfg_path)
+    if candidates:
+        st.markdown("##### Schedule source")
+        src_mode = st.radio(
+            "Preview/edit source",
+            ("Latest session export", "Existing files on disk"),
+            horizontal=True,
+            key="schedule_source_mode",
+        )
+        if src_mode == "Existing files on disk":
+            binge_opts = [p for p in candidates if "GRIDS" not in p.name.upper()]
+            grids_opts = [p for p in candidates if "GRIDS" in p.name.upper()]
+            if not binge_opts or not grids_opts:
+                st.warning("Could not find both BINGE and BINGE GRIDS files under `data/` or `out/`.")
+            else:
+                def _fmt_path(p: Path) -> str:
+                    return str(p).replace("\\", "/")
+
+                default_binge = next((p for p in binge_opts if "BINGE" in p.name.upper()), binge_opts[0])
+                default_grids = next((p for p in grids_opts if "BINGE" in p.name.upper()), grids_opts[0])
+                pick_binge = st.selectbox(
+                    "BINGE workbook",
+                    binge_opts,
+                    index=binge_opts.index(default_binge),
+                    format_func=_fmt_path,
+                    key="schedule_pick_binge",
+                )
+                pick_grids = st.selectbox(
+                    "BINGE GRIDS workbook",
+                    grids_opts,
+                    index=grids_opts.index(default_grids),
+                    format_func=_fmt_path,
+                    key="schedule_pick_grids",
+                )
+                if st.button("Load selected schedule", use_container_width=True, key="schedule_load_existing"):
+                    st.session_state["binge_path"] = Path(pick_binge)
+                    st.session_state["grids_path"] = Path(pick_grids)
+                    st.session_state["out_dir"] = Path(pick_binge).parent
+                    st.rerun()
+    else:
+        st.caption("No existing workbook files found under `data/` or `out/`.")
+
     completed = _load_completed_months(cfg_path)
     if completed:
         st.caption(
