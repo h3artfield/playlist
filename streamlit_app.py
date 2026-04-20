@@ -2841,6 +2841,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 else:
                     st.warning("No movie/program entries were found in the archive list.")
             else:
+                full_movie_opts = _movie_program_picker_options(cfg, extra_tab_names, template_slots, nikki)
                 auto_movie_opts = _auto_movie_candidates(
                     cfg,
                     cfg_path,
@@ -2853,6 +2854,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                     runtime_map = _movie_runtime_minutes(str(cfg_path.resolve()))
                     commercials_pct = 30.0
                     fallback_runtime = 95
+                    edit_movie_opts = full_movie_opts if full_movie_opts else auto_movie_opts
                     by_date: dict[str, list[dict[str, Any]]] = {}
                     for r in sorted(oto_rows, key=lambda rr: (rr["date_iso"], int(rr["start_slot"]))):
                         by_date.setdefault(str(r["date_iso"]), []).append(r)
@@ -2883,12 +2885,12 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                         editable_seq: list[str] = []
                         for i_seq, default_opt in enumerate(seq_opts):
                             try:
-                                default_idx = auto_movie_opts.index(default_opt)
+                                default_idx = edit_movie_opts.index(default_opt)
                             except ValueError:
                                 default_idx = 0
                             edited_opt = st.selectbox(
                                 f"{d} selected movie {i_seq + 1}",
-                                auto_movie_opts,
+                                edit_movie_opts,
                                 index=default_idx,
                                 format_func=lambda opt: _archive_pick_label(opt),
                                 key=f"build_oto_auto_movie_seq_{d}_{i_seq}",
