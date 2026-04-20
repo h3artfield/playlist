@@ -421,16 +421,43 @@ def _write_binge_notes_sheet(
     ui_notes: dict[str, str],
     override_records: Optional[list[BingeRowOverride]] = None,
 ) -> None:
+    hdr_font = Font(name="Calibri", size=11, bold=True)
+    hdr_fill = PatternFill(fill_type="solid", fgColor="EAEAEA")
+    cell_font = Font(name="Calibri", size=11)
+    top_left = Alignment(vertical="top", horizontal="left", wrap_text=False)
+    top_wrap = Alignment(vertical="top", horizontal="left", wrap_text=True)
+
     ws.cell(row=1, column=1, value="Item")
     ws.cell(row=1, column=2, value="Response")
+    for c in (1, 2):
+        cell = ws.cell(row=1, column=c)
+        cell.font = hdr_font
+        cell.fill = hdr_fill
+        cell.alignment = top_left
+
+    ws.freeze_panes = "A2"
+    ws.column_dimensions["A"].width = 34
+    ws.column_dimensions["B"].width = 130
     row = 2
     for k, v in ui_notes.items():
-        ws.cell(row=row, column=1, value=k)
-        ws.cell(row=row, column=2, value=str(v))
-        row += 1
+        item_text = str(k)
+        value_text = str(v)
+        parts = [value_text]
+        if item_text.lower().endswith("notes") and " | " in value_text:
+            parts = [p.strip() for p in value_text.split(" | ") if p.strip()]
+        for i, part in enumerate(parts):
+            ws.cell(row=row, column=1, value=item_text if i == 0 else "")
+            ws.cell(row=row, column=2, value=part)
+            ws.cell(row=row, column=1).font = cell_font
+            ws.cell(row=row, column=2).font = cell_font
+            ws.cell(row=row, column=1).alignment = top_left
+            ws.cell(row=row, column=2).alignment = top_wrap
+            row += 1
     if override_records:
         row += 1
         ws.cell(row=row, column=1, value="Manual row overrides (detail)")
+        ws.cell(row=row, column=1).font = hdr_font
+        ws.cell(row=row, column=1).fill = hdr_fill
         row += 1
         headers = (
             "Match date",
@@ -445,6 +472,20 @@ def _write_binge_notes_sheet(
         )
         for c, h in enumerate(headers, start=1):
             ws.cell(row=row, column=c, value=h)
+            ws.cell(row=row, column=c).font = hdr_font
+            ws.cell(row=row, column=c).fill = hdr_fill
+            ws.cell(row=row, column=c).alignment = top_left
+            if c in (1, 3):
+                ws.column_dimensions[get_column_letter(c)].width = 13
+            elif c in (2, 4, 5):
+                ws.column_dimensions[get_column_letter(c)].width = 10
+            elif c in (6, 8):
+                ws.column_dimensions[get_column_letter(c)].width = 11
+            elif c == 7:
+                ws.column_dimensions[get_column_letter(c)].width = 28
+            elif c == 9:
+                ws.column_dimensions[get_column_letter(c)].width = 48
+        hdr_row = row
         row += 1
         for o in override_records:
             ws.cell(row=row, column=1, value=o.match_date.isoformat())
@@ -456,7 +497,11 @@ def _write_binge_notes_sheet(
             ws.cell(row=row, column=7, value=o.new_show)
             ws.cell(row=row, column=8, value=o.new_episode_num)
             ws.cell(row=row, column=9, value=o.new_episode_name)
+            for c in range(1, 10):
+                ws.cell(row=row, column=c).font = cell_font
+                ws.cell(row=row, column=c).alignment = top_wrap if c in (7, 9) else top_left
             row += 1
+        ws.auto_filter.ref = f"A{hdr_row}:I{max(hdr_row, row - 1)}"
 
 
 def write_binge_workbook(
