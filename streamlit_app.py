@@ -2382,6 +2382,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 or k.startswith("build_oto_movie_seq_len_")
                 or k.startswith("build_oto_movie_same_")
                 or k.startswith("build_oto_runtime_")
+                or k.startswith("build_oto_auto_movie_seq_")
             ):
                 st.session_state.pop(k, None)
         st.session_state["_build_scope_key"] = scope_key
@@ -2824,6 +2825,22 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                         seq_opts = _build_auto_plan(rows_for_day)
                         if not seq_opts:
                             continue
+                        st.caption(f"Auto plan for `{d}` (editable):")
+                        editable_seq: list[str] = []
+                        for i_seq, default_opt in enumerate(seq_opts):
+                            try:
+                                default_idx = auto_movie_opts.index(default_opt)
+                            except ValueError:
+                                default_idx = 0
+                            edited_opt = st.selectbox(
+                                f"{d} auto movie {i_seq + 1}",
+                                auto_movie_opts,
+                                index=default_idx,
+                                format_func=lambda opt: _archive_pick_label(opt),
+                                key=f"build_oto_auto_movie_seq_{d}_{i_seq}",
+                            )
+                            editable_seq.append(edited_opt)
+                        seq_opts = editable_seq
                         content_per_slot = 30.0 * max(0.05, (1.0 - commercials_pct / 100.0))
                         raw_weights = [
                             max(1.0, float(_runtime_for_archive_option(cfg, opt, runtime_map) or fallback_runtime) / content_per_slot)
