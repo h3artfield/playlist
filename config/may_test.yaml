@@ -1,0 +1,193 @@
+# Sandbox config to replay/test week 1 of May without changing production flow.
+# Use this in Setup when someone wants to regenerate 2026-05-04 week.
+
+gracenote_binge_id: 45397
+nikki_workbook: "../data/2024 Nikki Spreadsheets.xlsx"
+timezone_note: local
+wrap_episodes: true
+
+# Keep test cursors separate from production.
+cursor_state_file: episode_cursors_may_test.json
+
+# Canonical reference set: last 3 weeks of April + first week of May (5-4).
+reference_binge_file: "../data/MAY 2026 REFERENCE BINGE.xlsx"
+reference_binge_sheet: "5-4-2026"
+reference_binge_all_sheets: true
+reference_binge_sync_cursor_weeks:
+  - "2026-04-27"
+
+# TEST MODE: allow generation starting at week 1 of May.
+# Dates strictly before 2026-05-04 are copied from reference; on/after 2026-05-04 are generated.
+reference_binge_literal_copy_before: "2026-05-04"
+
+# Keep May as first month in this test chain.
+build_sequence_start: "2026-05-01"
+
+shows:
+  jim_bowie:
+    display_name: "The Adventures of Jim Bowie"
+    kind: series
+    semantic_group: western
+    nikki_sheet: "2025 JIM BOWIE"
+    prefix: AJB
+    start_episode_index: 60
+    overnight_repeat_after: sunday
+  texan:
+    display_name: "The Texan"
+    kind: series
+    semantic_group: western
+    nikki_sheet: "The Texan - Note - missing epis"
+    prefix: TEX
+    binge_row_minutes: 30
+  hunter:
+    display_name: "Hunter"
+    kind: series
+    semantic_group: action_drama
+    nikki_sheet: "Hunter"
+    prefix: HUN
+    binge_row_minutes: 60
+    overnight_repeat_after: daily
+  renegade:
+    display_name: "Renegade"
+    kind: series
+    semantic_group: action_drama
+    nikki_sheet: "Renegade"
+    prefix: REN
+    binge_row_minutes: 60
+    overnight_repeat_after: daily
+  carol_burnett:
+    display_name: "The Carol Burnett Show"
+    kind: series
+    semantic_group: comedy_variety
+    nikki_sheet: "Carol Burnett - NOTE - EPISODE "
+    prefix: CBS
+    binge_row_minutes: 60
+    nikki_row_filter: green_episode_cell
+    overnight_repeat_after: thursday
+  mst3k:
+    display_name: "Mystery Science Theater 3000"
+    kind: series
+    semantic_group: cult_movie
+    nikki_sheet: "MST3K - NOTE - Each episode fol"
+    prefix: MST
+    binge_row_minutes: 120
+  real_mccoys:
+    display_name: "The Real McCoys"
+    kind: series
+    semantic_group: western
+    nikki_sheet: "Real McCoys - NOTE - Each Seaso"
+    prefix: MCC
+    overnight_repeat_after: daily
+    overnight_repeat_pattern: mccoys
+    overnight_repeat_morning_weekdays: [monday, tuesday, wednesday, thursday, friday, saturday]
+  jump_street:
+    display_name: "21 Jump Street"
+    kind: series
+    semantic_group: action_drama
+    nikki_sheet: "21 Jump Street"
+    prefix: JMP
+    binge_row_minutes: 60
+  saint:
+    display_name: "The Saint"
+    kind: series
+    semantic_group: action_adventure
+    nikki_sheet: "The Saint - NOTE - Episode titl"
+    prefix: SNT
+    binge_row_minutes: 60
+  laugh_in:
+    display_name: "Rowan & Martin's Laugh-In"
+    kind: series
+    semantic_group: comedy_variety
+    nikki_sheet: "Laugh-In - NOTE - CC Files are "
+    prefix: RML
+    binge_row_minutes: 60
+  lucy:
+    display_name: "The Lucy Show"
+    kind: series
+    semantic_group: comedy_variety
+    nikki_sheet: "Lucy Show"
+    prefix: LUC
+    nikki_style: generic
+  tim_conway:
+    display_name: "The Tim Conway Comedy Hour"
+    kind: series
+    semantic_group: comedy_variety
+    nikki_sheet: "Tim Conway Comedy Hour - Note -"
+    prefix: TCC
+    binge_row_minutes: 60
+    nikki_style: leading_episode
+
+  paid_programming:
+    display_name: "Paid Programming"
+    kind: literal
+    semantic_group: ministry
+  perry_stone:
+    display_name: "Perry Stone"
+    kind: literal
+    semantic_group: ministry
+  sacred_name:
+    display_name: "Sacred Name"
+    kind: literal
+    semantic_group: ministry
+  les_feldick:
+    display_name: "Les Feldick Ministries"
+    kind: literal
+    semantic_group: ministry
+  healthy_christian:
+    display_name: "The Healthy Christian with Rich Stocks"
+    kind: literal
+    semantic_group: ministry
+  michael_youssef:
+    display_name: "Michael Youssef"
+    kind: literal
+    semantic_group: ministry
+  micheal_youssef:
+    display_name: "Micheal Youssef"
+    kind: literal
+    semantic_group: ministry
+  awakening:
+    display_name: "The Awakening Hour"
+    kind: literal
+    semantic_group: ministry
+  time_for_hope:
+    display_name: "Time for Hope"
+    kind: literal
+    semantic_group: ministry
+  rejoyce:
+    display_name: "Rejoyce in Jesus"
+    kind: literal
+    semantic_group: ministry
+  postcard_travel:
+    display_name: "Post Card Travel TV"
+    kind: literal
+    semantic_group: travel_lifestyle
+  jet_set:
+    display_name: "The Jet Set"
+    kind: literal
+    semantic_group: travel_lifestyle
+
+weeks:
+  - monday: "2026-04-06"
+    grids_file: "../data/APRIL 2026 BINGE GRIDS.xlsx"
+    sheet_name: "4-6-2026"
+  - monday: "2026-04-13"
+    grids_file: "../data/APRIL 2026 BINGE GRIDS.xlsx"
+    sheet_name: "4-13-2026"
+  - monday: "2026-04-20"
+    grids_file: "../data/APRIL 2026 BINGE GRIDS.xlsx"
+    sheet_name: "4-20-2026"
+  - monday: "2026-04-27"
+    grids_file: "../data/APRIL 2026 BINGE GRIDS.xlsx"
+    sheet_name: "4-27-2026"
+  - monday: "2026-05-04"
+    grids_file: "../data/MAY 2026 BINGE GRIDS.xlsx"
+    sheet_name: "5-4-2026"
+  - monday: "2026-05-11"
+    grids_file: "../data/MAY 2026 BINGE GRIDS.xlsx"
+    sheet_name: "5-11-2026"
+  - monday: "2026-05-18"
+    grids_file: "../data/MAY 2026 BINGE GRIDS.xlsx"
+    sheet_name: "5-18-2026"
+  - monday: "2026-05-25"
+    grids_file: "../data/MAY 2026 BINGE GRIDS.xlsx"
+    sheet_name: "5-25-2026"
