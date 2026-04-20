@@ -2077,6 +2077,10 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
             "build_oto_preview_day",
         ):
             st.session_state.pop(k, None)
+        # Clear per-day editor/multiselect widget state tied to the old build scope.
+        for k in list(st.session_state.keys()):
+            if k.startswith("build_oto_slot_editor_") or k.startswith("build_oto_day_multi_"):
+                st.session_state.pop(k, None)
         st.session_state["_build_scope_key"] = scope_key
 
     template_slots, template_warnings = _schedule_template_slots(selected_weeks)
@@ -2177,6 +2181,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                         day_df = pd.DataFrame(
                             [
                                 {
+                                    "Pick": str(r["slot_id"]) in prior_selected,
                                     "Date": r["date_iso"],
                                     "Start": r["start"],
                                     "Finish": r["finish"],
@@ -2188,34 +2193,21 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                         )
                         day_slot_ids = [str(r["slot_id"]) for r in day_rows]
                         day_selected_ids: set[str] = set()
-                        if _dataframe_row_selection_supported():
-                            event = st.dataframe(
-                                day_df,
-                                use_container_width=True,
-                                height=340,
-                                hide_index=True,
-                                on_select="rerun",
-                                selection_mode="multi-row",
-                                key=f"build_oto_slot_select_{preview_week}_{day_pick}",
-                            )
-                            picked_rows: list[int] = []
-                            try:
-                                picked_rows = list(event["selection"]["rows"])  # type: ignore[index]
-                            except (KeyError, TypeError, AttributeError):
-                                picked_rows = []
-                            day_selected_ids = {
-                                day_slot_ids[int(i)]
-                                for i in picked_rows
-                                if isinstance(i, int) and 0 <= int(i) < len(day_slot_ids)
-                            }
-                        else:
-                            picked = st.multiselect(
-                                "Pick blocks",
-                                day_slot_ids,
-                                format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
-                                key=f"build_oto_day_multi_{preview_week}_{day_pick}",
-                            )
-                            day_selected_ids = {sid for sid in picked if sid in slot_by_id}
+                        editor_key = f"build_oto_slot_editor_{preview_week}_{day_pick}"
+                        edited = st.data_editor(
+                            day_df,
+                            hide_index=True,
+                            use_container_width=True,
+                            height=340,
+                            disabled=["Date", "Start", "Finish", "Duration", "Show"],
+                            key=editor_key,
+                        )
+                        try:
+                            for i, row in edited.iterrows():
+                                if bool(row.get("Pick")) and 0 <= int(i) < len(day_slot_ids):
+                                    day_selected_ids.add(day_slot_ids[int(i)])
+                        except Exception:
+                            day_selected_ids = {sid for sid in day_slot_ids if sid in prior_selected}
                         merged_selected = (prior_selected - set(day_slot_ids)) | day_selected_ids
                         st.session_state["build_oto_slot_ids"] = [sid for sid in slot_ids if sid in merged_selected]
                         oto_ids = st.session_state["build_oto_slot_ids"]
