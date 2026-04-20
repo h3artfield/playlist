@@ -2072,7 +2072,6 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         for k in (
             "build_oto_slot_ids",
             "build_mass_seed_ids",
-            "build_oto_movie_list_keys",
             "build_oto_preview_week",
             "build_oto_preview_day",
         ):
@@ -2083,6 +2082,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 k.startswith("build_oto_slot_editor_")
                 or k.startswith("build_oto_day_multi_")
                 or k.startswith("build_oto_pick_slot_")
+                or k.startswith("build_oto_movie_for_")
             ):
                 st.session_state.pop(k, None)
         st.session_state["_build_scope_key"] = scope_key
@@ -2126,7 +2126,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     oto_manual_pool: list[dict[str, Any]] = []
     oto_manual_start_idx: Optional[int] = None
     oto_manual_advance = True
-    oto_movie_list_keys: list[str] = []
+    oto_movie_by_slot: dict[str, str] = {}
     if use_oto:
         if not slot_ids:
             st.warning("No editable schedule blocks found in the selected weeks.")
@@ -2294,20 +2294,43 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                     st.warning("No related series candidates were found for auto-populate.")
             elif oto_fill_mode == "Replace time window with movie list":
                 movie_opts = _movie_program_picker_options(cfg, extra_tab_names, template_slots, nikki)
-                max_titles = max(0, len(oto_rows))
-                st.caption(
-                    f"Pick up to **{max_titles}** titles from the archive (A-Z). "
-                    "One title can cover one or more selected time blocks."
-                )
+                st.caption("Pick replacements per selected block. Choices are grouped by day and support duplicates.")
                 if movie_opts:
-                    picked = st.multiselect(
-                        "Movie/program list (ordered by selection)",
-                        movie_opts,
-                        format_func=_archive_pick_label,
-                        key="build_oto_movie_list_keys",
-                    )
-                    # Allow as many titles as selected blocks can support.
-                    oto_movie_list_keys = list(picked[:max_titles])
+                    if not oto_rows:
+                        st.info("Select one or more OTO blocks first, then assign a movie/program to each block.")
+                    else:
+                        ordered_rows = sorted(oto_rows, key=lambda r: (r["date_iso"], int(r["start_slot"])))
+                        by_date: dict[str, list[dict[str, Any]]] = {}
+                        for r in ordered_rows:
+                            by_date.setdefault(str(r["date_iso"]), []).append(r)
+                        tab_dates = list(by_date.keys())
+                        date_tabs = st.tabs(tab_dates)
+                        none_opt = "__none__"
+                        slot_opts = [none_opt] + movie_opts
+
+                        def _slot_fmt(opt: str) -> str:
+                            if opt == none_opt:
+                                return "— Select movie/program —"
+                            return _archive_pick_label(opt)
+
+                        for i, d in enumerate(tab_dates):
+                            with date_tabs[i]:
+                                rows_for_day = by_date[d]
+                                for r in rows_for_day:
+                                    sid = str(r["slot_id"])
+                                    pick_key = f"build_oto_movie_for_{sid}"
+                                    label = (
+                                        f"{r['start']}-{r['finish']} ({r['duration_label']}) · "
+                                        f"{str(r['show'])}"
+                                    )
+                                    picked = st.selectbox(
+                                        label,
+                                        slot_opts,
+                                        format_func=_slot_fmt,
+                                        key=pick_key,
+                                    )
+                                    if picked != none_opt:
+                                        oto_movie_by_slot[sid] = picked
                 else:
                     st.warning("No movie/program entries were found in the archive list.")
             else:
@@ -2471,7 +2494,9 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     if use_oto:
         oto_dur = _format_duration_minutes(sum(int(r["duration_minutes"]) for r in oto_rows)) if oto_rows else "0m"
         if oto_fill_mode == "Replace time window with movie list":
-            oto_name = ", ".join(_display_name_for_archive_pick(cfg, k) for k in oto_movie_list_keys) if oto_movie_list_keys else "—"
+            assigned = [oto_movie_by_slot.get(str(r["slot_id"])) for r in sorted(oto_rows, key=lambda r: (r["date_iso"], int(r["start_slot"])))]
+            assigned = [a for a in assigned if a]
+            oto_name = f"{len(assigned)} assigned block(s)" if assigned else "—"
         else:
             oto_name = _display_name_for_archive_pick(cfg, oto_pick) if oto_pick else "—"
         st.markdown(
@@ -2501,10 +2526,11 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     if use_oto and oto_fill_mode == "Replace time window with movie list":
         if not oto_rows:
             preflight_issues.append("OTO movie-list mode requires selected time blocks.")
-        if not oto_movie_list_keys:
-            preflight_issues.append("OTO movie-list mode requires at least one movie/program title.")
-        if len(oto_movie_list_keys) > len(oto_rows):
-            preflight_issues.append("OTO movie-list mode supports at most one title per selected block.")
+        missing_movie_slots = [r for r in oto_rows if not oto_movie_by_slot.get(str(r["slot_id"]))]
+        if missing_movie_slots:
+            preflight_issues.append(
+                f"OTO movie-list mode requires a movie/program selection for each block ({len(missing_movie_slots)} missing)."
+            )
     if use_mass and (not mass_rows or not mass_pick):
         preflight_issues.append("Mass is enabled but block selection and/or replacement show is missing.")
     if use_mass and not st.session_state.get("build_mass_confirm"):
@@ -2542,20 +2568,16 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
             else:
                 ordered_oto_rows = sorted(oto_rows, key=lambda r: (r["date_iso"], int(r["start_slot"])))
                 if oto_fill_mode == "Replace time window with movie list":
-                    if not oto_movie_list_keys:
-                        st.error("OTO movie-list mode requires one or more movie/program titles.")
-                        can_run = False
-                    elif len(oto_movie_list_keys) > len(ordered_oto_rows):
-                        st.error("OTO movie-list mode supports at most one title per selected block.")
+                    missing_rows = [r for r in ordered_oto_rows if not oto_movie_by_slot.get(str(r["slot_id"]))]
+                    if missing_rows:
+                        st.error(
+                            f"OTO movie-list mode is missing replacements for {len(missing_rows)} selected block(s)."
+                        )
                         can_run = False
                     else:
-                        per_title = len(ordered_oto_rows) // len(oto_movie_list_keys)
-                        remainder = len(ordered_oto_rows) % len(oto_movie_list_keys)
-                        for i, show_key in enumerate(oto_movie_list_keys):
-                            repeat = per_title + (1 if i < remainder else 0)
-                            oto_grid_displays.extend(
-                                [_display_name_for_archive_pick(cfg, show_key)] * repeat
-                            )
+                        for row in ordered_oto_rows:
+                            show_key = str(oto_movie_by_slot[str(row["slot_id"])])
+                            oto_grid_displays.append(_display_name_for_archive_pick(cfg, show_key))
                 else:
                     oto_display = _display_name_for_archive_pick(cfg, oto_pick)
                     oto_grid_displays = [oto_display] * len(ordered_oto_rows)
