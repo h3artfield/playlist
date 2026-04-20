@@ -2083,6 +2083,9 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 or k.startswith("build_oto_day_multi_")
                 or k.startswith("build_oto_pick_slot_")
                 or k.startswith("build_oto_movie_for_")
+                or k.startswith("build_oto_movie_seq_")
+                or k.startswith("build_oto_movie_seq_len_")
+                or k.startswith("build_oto_movie_same_")
             ):
                 st.session_state.pop(k, None)
         st.session_state["_build_scope_key"] = scope_key
@@ -2127,6 +2130,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     oto_manual_start_idx: Optional[int] = None
     oto_manual_advance = True
     oto_movie_by_slot: dict[str, str] = {}
+    oto_movie_fill_rule = "Sequential by slot"
     if use_oto:
         if not slot_ids:
             st.warning("No editable schedule blocks found in the selected weeks.")
@@ -2294,7 +2298,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                     st.warning("No related series candidates were found for auto-populate.")
             elif oto_fill_mode == "Replace time window with movie list":
                 movie_opts = _movie_program_picker_options(cfg, extra_tab_names, template_slots, nikki)
-                st.caption("Pick replacements per selected block. Choices are grouped by day and support duplicates.")
+                st.caption("Swap by day: pick an ordered movie/program sequence once, then auto-fill selected blocks.")
                 if movie_opts:
                     if not oto_rows:
                         st.info("Select one or more OTO blocks first, then assign a movie/program to each block.")
@@ -2305,32 +2309,90 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                             by_date.setdefault(str(r["date_iso"]), []).append(r)
                         tab_dates = list(by_date.keys())
                         date_tabs = st.tabs(tab_dates)
+                        oto_movie_fill_rule = st.radio(
+                            "Fill rule",
+                            ("Sequential by slot", "Equal chunks"),
+                            horizontal=True,
+                            key="build_oto_movie_fill_rule",
+                        )
+                        assign_mode = st.radio(
+                            "Assignment mode",
+                            ("Program sequence (recommended)", "Per-slot (advanced)"),
+                            horizontal=True,
+                            key="build_oto_movie_assign_mode",
+                        )
                         none_opt = "__none__"
                         slot_opts = [none_opt] + movie_opts
-
-                        def _slot_fmt(opt: str) -> str:
-                            if opt == none_opt:
-                                return "— Select movie/program —"
-                            return _archive_pick_label(opt)
 
                         for i, d in enumerate(tab_dates):
                             with date_tabs[i]:
                                 rows_for_day = by_date[d]
-                                for r in rows_for_day:
-                                    sid = str(r["slot_id"])
-                                    pick_key = f"build_oto_movie_for_{sid}"
-                                    label = (
-                                        f"{r['start']}-{r['finish']} ({r['duration_label']}) · "
-                                        f"{str(r['show'])}"
+                                st.caption(f"{len(rows_for_day)} selected block(s) on `{d}`.")
+                                if assign_mode == "Program sequence (recommended)":
+                                    max_seq = max(1, min(12, len(rows_for_day)))
+                                    seq_len = int(
+                                        st.number_input(
+                                            "How many items in the sequence?",
+                                            min_value=1,
+                                            max_value=max_seq,
+                                            value=1,
+                                            step=1,
+                                            key=f"build_oto_movie_seq_len_{d}",
+                                        )
                                     )
-                                    picked = st.selectbox(
-                                        label,
-                                        slot_opts,
-                                        format_func=_slot_fmt,
-                                        key=pick_key,
-                                    )
-                                    if picked != none_opt:
-                                        oto_movie_by_slot[sid] = picked
+                                    seq_opts: list[str] = []
+                                    for j in range(seq_len):
+                                        picked = st.selectbox(
+                                            f"Sequence item {j + 1}",
+                                            slot_opts,
+                                            format_func=lambda opt: "— Select movie/program —"
+                                            if opt == none_opt
+                                            else _archive_pick_label(opt),
+                                            key=f"build_oto_movie_seq_{d}_{j}",
+                                        )
+                                        if picked != none_opt:
+                                            seq_opts.append(picked)
+                                    if seq_opts:
+                                        if oto_movie_fill_rule == "Equal chunks":
+                                            per = len(rows_for_day) // len(seq_opts)
+                                            rem = len(rows_for_day) % len(seq_opts)
+                                            idx = 0
+                                            for m_idx, pick in enumerate(seq_opts):
+                                                repeat = per + (1 if m_idx < rem else 0)
+                                                for _ in range(repeat):
+                                                    if idx >= len(rows_for_day):
+                                                        break
+                                                    sid = str(rows_for_day[idx]["slot_id"])
+                                                    oto_movie_by_slot[sid] = pick
+                                                    idx += 1
+                                        else:
+                                            for r_idx, r in enumerate(rows_for_day):
+                                                sid = str(r["slot_id"])
+                                                oto_movie_by_slot[sid] = seq_opts[r_idx % len(seq_opts)]
+                                else:
+                                    for r in rows_for_day:
+                                        sid = str(r["slot_id"])
+                                        pick_key = f"build_oto_movie_for_{sid}"
+                                        label = (
+                                            f"{r['start']}-{r['finish']} ({r['duration_label']}) · "
+                                            f"{str(r['show'])}"
+                                        )
+                                        picked = st.selectbox(
+                                            label,
+                                            slot_opts,
+                                            format_func=lambda opt: "— Select movie/program —"
+                                            if opt == none_opt
+                                            else _archive_pick_label(opt),
+                                            key=pick_key,
+                                        )
+                                        if picked != none_opt:
+                                            oto_movie_by_slot[sid] = picked
+                                assigned_day = sum(
+                                    1 for r in rows_for_day if oto_movie_by_slot.get(str(r["slot_id"]))
+                                )
+                                st.caption(
+                                    f"Assigned **{assigned_day}/{len(rows_for_day)}** block(s) for `{d}`."
+                                )
                 else:
                     st.warning("No movie/program entries were found in the archive list.")
             else:
