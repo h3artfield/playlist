@@ -1099,6 +1099,21 @@ def _semantic_candidates(cfg, *, group: str, kind: str, exclude_keys: set[str]) 
     return out
 
 
+def _movie_program_picker_options(cfg, extra_tab_names: list[str]) -> list[str]:
+    """Movie/program options from config + archive-only tabs, sorted alphabetically."""
+    opts: list[str] = [k for k, sd in cfg.shows.items() if sd.kind == "literal"]
+    opts.extend(workbook_tab_option(t) for t in extra_tab_names)
+    uniq: list[str] = []
+    seen: set[str] = set()
+    for opt in opts:
+        if opt in seen:
+            continue
+        seen.add(opt)
+        uniq.append(opt)
+    uniq.sort(key=lambda opt: _display_name_for_archive_pick(cfg, opt).casefold())
+    return uniq
+
+
 def _grids_preview_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """Show blank cells in the GRIDS preview instead of ``None`` / ``nan`` text."""
 
@@ -2073,25 +2088,23 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 else:
                     st.warning("No related series candidates were found for auto-populate.")
             elif oto_fill_mode == "Replace time window with movie list":
-                literal_keys = sorted(
-                    [k for k, sd in cfg.shows.items() if sd.kind == "literal"],
-                    key=lambda k: cfg.shows[k].display_name.casefold(),
-                )
+                movie_opts = _movie_program_picker_options(cfg, extra_tab_names)
                 max_titles = max(0, len(oto_rows))
                 st.caption(
-                    f"Pick up to **{max_titles}** titles (one title can cover one or more selected time blocks)."
+                    f"Pick up to **{max_titles}** titles from the archive (A-Z). "
+                    "One title can cover one or more selected time blocks."
                 )
-                if literal_keys:
+                if movie_opts:
                     picked = st.multiselect(
                         "Movie/program list (ordered by selection)",
-                        literal_keys,
-                        format_func=lambda k: cfg.shows[k].display_name,
+                        movie_opts,
+                        format_func=_archive_pick_label,
                         key="build_oto_movie_list_keys",
                     )
                     # Allow as many titles as selected blocks can support.
                     oto_movie_list_keys = list(picked[:max_titles])
                 else:
-                    st.warning("No literal movie/program entries found in setup.")
+                    st.warning("No movie/program entries were found in the archive list.")
             else:
                 auto_movie_opts = _semantic_candidates(
                     cfg,
