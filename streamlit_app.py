@@ -2883,12 +2883,12 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                         editable_seq: list[str] = []
                         for i_seq, default_opt in enumerate(seq_opts):
                             try:
-                                default_idx = movie_opts.index(default_opt)
+                                default_idx = auto_movie_opts.index(default_opt)
                             except ValueError:
                                 default_idx = 0
                             edited_opt = st.selectbox(
                                 f"{d} selected movie {i_seq + 1}",
-                                movie_opts,
+                                auto_movie_opts,
                                 index=default_idx,
                                 format_func=lambda opt: _archive_pick_label(opt),
                                 key=f"build_oto_auto_movie_seq_{d}_{i_seq}",
