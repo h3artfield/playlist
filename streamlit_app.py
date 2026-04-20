@@ -868,6 +868,80 @@ def _format_duration_minutes(minutes: int) -> str:
     return f"{m}m"
 
 
+def _clock_label_from_minutes(total_minutes: float) -> str:
+    mins = int(round(float(total_minutes))) % (24 * 60)
+    hh = mins // 60
+    mm = mins % 60
+    ampm = "AM" if hh < 12 else "PM"
+    hh12 = hh % 12
+    if hh12 == 0:
+        hh12 = 12
+    return f"{hh12}:{mm:02d} {ampm}"
+
+
+def _runtime_timing_notes_for_day(
+    *,
+    cfg,
+    day_iso: str,
+    rows_for_day: list[dict[str, Any]],
+    assigned_by_slot: dict[str, str],
+    runtime_map: dict[str, int],
+    fallback_runtime: int,
+    commercials_pct: float,
+) -> list[str]:
+    if not rows_for_day:
+        return []
+    rows = sorted(rows_for_day, key=lambda r: int(r["start_slot"]))
+    for i in range(1, len(rows)):
+        if int(rows[i]["start_slot"]) != int(rows[i - 1]["end_slot"]):
+            return []
+    picks: list[tuple[dict[str, Any], str]] = []
+    for r in rows:
+        sid = str(r["slot_id"])
+        opt = assigned_by_slot.get(sid)
+        if not opt:
+            return []
+        picks.append((r, opt))
+    runs: list[tuple[str, int, int]] = []
+    for r, opt in picks:
+        st_slot = int(r["start_slot"])
+        end_slot = int(r["end_slot"])
+        if not runs or runs[-1][0] != opt:
+            runs.append((opt, st_slot, end_slot))
+        else:
+            prev_opt, prev_start, _prev_end = runs[-1]
+            runs[-1] = (prev_opt, prev_start, end_slot)
+    d = date.fromisoformat(day_iso)
+    day_label = f"{d.strftime('%A')} {d.month}/{d.day}"
+    cur_mins = int(rows[0]["start_slot"]) * 30
+    window_end_mins = int(rows[-1]["end_slot"]) * 30
+    notes: list[str] = []
+    for idx, (opt, run_start_slot, _run_end_slot) in enumerate(runs):
+        title = _display_name_for_archive_pick(cfg, opt)
+        runtime = _runtime_for_archive_option(cfg, opt, runtime_map)
+        if runtime is None:
+            runtime = int(fallback_runtime)
+        sched_start_mins = run_start_slot * 30
+        if idx > 0 and abs(cur_mins - sched_start_mins) >= 1:
+            notes.append(
+                f"Please note that on {day_label} {title} will start at {_clock_label_from_minutes(cur_mins)}."
+            )
+        airtime = float(runtime) * (1.0 + float(commercials_pct) / 100.0)
+        cur_mins += airtime
+    drift = int(round(cur_mins - window_end_mins))
+    if drift > 0:
+        notes.append(
+            f"Runtime fit on {day_label}: estimated over by {drift} minute(s) "
+            "(the sequence may end later within the selected window)."
+        )
+    elif drift < 0:
+        notes.append(
+            f"Runtime fit on {day_label}: estimated under by {abs(drift)} minute(s) "
+            "(extra filler/commercial time may be needed)."
+        )
+    return notes
+
+
 def _schedule_template_slots(weeks: list) -> tuple[list[dict[str, Any]], list[str]]:
     slots: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -1290,6 +1364,42 @@ def _semantic_group_for_archive_option(
         if g:
             return g
     return ""
+
+
+@st.cache_data(show_spinner=False)
+def _movie_runtime_minutes(cfg_path_str: str) -> dict[str, int]:
+    """Optional movie runtime map from config/movie_runtime_minutes.json."""
+    cfg_path = Path(cfg_path_str)
+    cfg_dir = cfg_path.resolve().parent
+    repo_root = cfg_dir.parent if cfg_dir.name.casefold() == "config" else cfg_dir
+    p = repo_root / "config" / "movie_runtime_minutes.json"
+    if not p.is_file():
+        return {}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, int] = {}
+    for k, v in raw.items():
+        try:
+            mins = int(v)
+        except (TypeError, ValueError):
+            continue
+        if mins <= 0:
+            continue
+        for kk in _title_key_variants(str(k)):
+            out[kk] = mins
+    return out
+
+
+def _runtime_for_archive_option(cfg, opt: str, runtime_map: dict[str, int]) -> Optional[int]:
+    title = _display_name_for_archive_pick(cfg, opt)
+    for kk in _title_key_variants(title):
+        if kk in runtime_map:
+            return int(runtime_map[kk])
+    return None
 
 
 def _semantic_candidates(cfg, *, group: str, kind: str, exclude_keys: set[str]) -> list[str]:
@@ -2239,6 +2349,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 or k.startswith("build_oto_movie_seq_")
                 or k.startswith("build_oto_movie_seq_len_")
                 or k.startswith("build_oto_movie_same_")
+                or k.startswith("build_oto_runtime_")
             ):
                 st.session_state.pop(k, None)
         st.session_state["_build_scope_key"] = scope_key
@@ -2284,6 +2395,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     oto_manual_advance = True
     oto_movie_by_slot: dict[str, str] = {}
     oto_movie_fill_rule = "Sequential by slot"
+    oto_timing_notes: list[str] = []
     if use_oto:
         if not slot_ids:
             st.warning("No editable schedule blocks found in the selected weeks.")
@@ -2456,6 +2568,27 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                     if not oto_rows:
                         st.info("Select one or more OTO blocks first, then assign a movie/program to each block.")
                     else:
+                        runtime_map = _movie_runtime_minutes(str(cfg_path.resolve()))
+                        commercials_pct = float(
+                            st.number_input(
+                                "Estimated commercial %",
+                                min_value=0.0,
+                                max_value=90.0,
+                                value=30.0,
+                                step=5.0,
+                                key="build_oto_runtime_commercial_pct",
+                            )
+                        )
+                        fallback_runtime = int(
+                            st.number_input(
+                                "Fallback runtime for unknown movies (minutes)",
+                                min_value=30,
+                                max_value=240,
+                                value=95,
+                                step=5,
+                                key="build_oto_runtime_fallback",
+                            )
+                        )
                         ordered_rows = sorted(oto_rows, key=lambda r: (r["date_iso"], int(r["start_slot"])))
                         by_date: dict[str, list[dict[str, Any]]] = {}
                         for r in ordered_rows:
@@ -2506,22 +2639,63 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                                         if picked != none_opt:
                                             seq_opts.append(picked)
                                     if seq_opts:
-                                        if oto_movie_fill_rule == "Equal chunks":
-                                            per = len(rows_for_day) // len(seq_opts)
-                                            rem = len(rows_for_day) % len(seq_opts)
+                                        runtime_mode = st.checkbox(
+                                            "Use runtime-aware fit",
+                                            value=True,
+                                            key=f"build_oto_runtime_mode_{d}",
+                                        )
+                                        if runtime_mode:
+                                            content_per_slot = 30.0 * max(0.05, (1.0 - commercials_pct / 100.0))
+                                            raw_weights: list[float] = []
+                                            runtime_notes: list[str] = []
+                                            for pick in seq_opts:
+                                                rt = _runtime_for_archive_option(cfg, pick, runtime_map)
+                                                if rt is None:
+                                                    rt = fallback_runtime
+                                                    runtime_notes.append(
+                                                        f"{_display_name_for_archive_pick(cfg, pick)}: using fallback {fallback_runtime}m"
+                                                    )
+                                                raw_weights.append(max(1.0, rt / content_per_slot))
+                                            total_weight = sum(raw_weights) or float(len(seq_opts))
+                                            scaled = [w * len(rows_for_day) / total_weight for w in raw_weights]
+                                            counts = [max(1, int(v)) for v in scaled]
+                                            while sum(counts) > len(rows_for_day):
+                                                i_max = max(range(len(counts)), key=lambda i: counts[i])
+                                                if counts[i_max] > 1:
+                                                    counts[i_max] -= 1
+                                                else:
+                                                    break
+                                            while sum(counts) < len(rows_for_day):
+                                                frac = [scaled[i] - int(scaled[i]) for i in range(len(scaled))]
+                                                i_best = max(range(len(counts)), key=lambda i: frac[i])
+                                                counts[i_best] += 1
                                             idx = 0
-                                            for m_idx, pick in enumerate(seq_opts):
-                                                repeat = per + (1 if m_idx < rem else 0)
-                                                for _ in range(repeat):
+                                            for i_pick, pick in enumerate(seq_opts):
+                                                for _ in range(counts[i_pick]):
                                                     if idx >= len(rows_for_day):
                                                         break
                                                     sid = str(rows_for_day[idx]["slot_id"])
                                                     oto_movie_by_slot[sid] = pick
                                                     idx += 1
+                                            if runtime_notes:
+                                                st.caption("Runtime notes: " + " | ".join(runtime_notes))
                                         else:
-                                            for r_idx, r in enumerate(rows_for_day):
-                                                sid = str(r["slot_id"])
-                                                oto_movie_by_slot[sid] = seq_opts[r_idx % len(seq_opts)]
+                                            if oto_movie_fill_rule == "Equal chunks":
+                                                per = len(rows_for_day) // len(seq_opts)
+                                                rem = len(rows_for_day) % len(seq_opts)
+                                                idx = 0
+                                                for m_idx, pick in enumerate(seq_opts):
+                                                    repeat = per + (1 if m_idx < rem else 0)
+                                                    for _ in range(repeat):
+                                                        if idx >= len(rows_for_day):
+                                                            break
+                                                        sid = str(rows_for_day[idx]["slot_id"])
+                                                        oto_movie_by_slot[sid] = pick
+                                                        idx += 1
+                                            else:
+                                                for r_idx, r in enumerate(rows_for_day):
+                                                    sid = str(r["slot_id"])
+                                                    oto_movie_by_slot[sid] = seq_opts[r_idx % len(seq_opts)]
                                 else:
                                     for r in rows_for_day:
                                         sid = str(r["slot_id"])
@@ -2543,6 +2717,16 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                                 assigned_day = sum(
                                     1 for r in rows_for_day if oto_movie_by_slot.get(str(r["slot_id"]))
                                 )
+                                timing_notes = _runtime_timing_notes_for_day(
+                                    cfg=cfg,
+                                    day_iso=d,
+                                    rows_for_day=rows_for_day,
+                                    assigned_by_slot=oto_movie_by_slot,
+                                    runtime_map=runtime_map,
+                                    fallback_runtime=fallback_runtime,
+                                    commercials_pct=commercials_pct,
+                                )
+                                oto_timing_notes.extend(timing_notes)
                                 st.caption(
                                     f"Assigned **{assigned_day}/{len(rows_for_day)}** block(s) for `{d}`."
                                 )
@@ -2718,6 +2902,8 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         st.markdown(
             f"- OTO: **{len(oto_rows)}** block(s), duration **{oto_dur}**, replacement **{oto_name}**, mode **{oto_fill_mode}**"
         )
+        if oto_timing_notes:
+            st.markdown(f"- OTO timing notes: **{len(oto_timing_notes)}**")
     else:
         st.markdown("- OTO: none")
     if use_mass:
@@ -2952,7 +3138,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                         weeks=selected_weeks,
                         binge_row_overrides=oto_overrides or None,
                         binge_ui_notes={
-                            "Build window": (
+                            "Schedule window": (
                                 f"start={start_date.isoformat()} · weeks={len(selected_weeks)}"
                             ),
                             "OTO changes": (
@@ -2964,6 +3150,9 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                                 f"{len(mass_rows)} slot swap(s) persisted to source"
                                 if use_mass and mass_rows
                                 else "none"
+                            ),
+                            "OTO timing notes": (
+                                " | ".join(oto_timing_notes[:6]) if oto_timing_notes else "none"
                             ),
                         },
                         export_stations=station_kw,
@@ -2979,6 +3168,8 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                     else:
                         for msg in _apply_output_grid_slot_replacements_multi(grids_path, sorted(oto_rows, key=lambda r: (r["date_iso"], int(r["start_slot"]))), oto_grid_displays):
                             st.info(msg)
+                for note in oto_timing_notes:
+                    st.warning(note)
                 st.session_state["binge_path"] = binge_path
                 st.session_state["grids_path"] = grids_path
                 st.session_state["out_dir"] = out_dir
