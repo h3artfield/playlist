@@ -1836,7 +1836,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
             "build_mass_seed_ids",
             "build_oto_movie_list_keys",
             "build_oto_preview_week",
-            "build_oto_slot_editor",
+            "build_oto_preview_day",
         ):
             st.session_state.pop(k, None)
         st.session_state["_build_scope_key"] = scope_key
@@ -1919,39 +1919,63 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                     week_rows = [r for r in template_slots if str(r["week_monday"]) == str(preview_week)]
                     week_rows.sort(key=lambda r: (r["date_iso"], int(r["start_slot"])))
                     if week_rows:
-                        editor_df = pd.DataFrame(
+                        day_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+                        week_days = sorted({int(r["day_index"]) for r in week_rows})
+                        day_opts = [day_labels[i] for i in week_days if 0 <= i < len(day_labels)]
+                        day_pick = st.radio(
+                            "Preview day",
+                            day_opts,
+                            horizontal=True,
+                            key="build_oto_preview_day",
+                        )
+                        day_index = day_labels.index(day_pick)
+                        day_rows = [r for r in week_rows if int(r["day_index"]) == day_index]
+                        st.caption(
+                            "Click rows to select blocks. Selections persist across day/week changes."
+                        )
+                        day_df = pd.DataFrame(
                             [
                                 {
-                                    "Pick": r["slot_id"] in prior_selected,
                                     "Date": r["date_iso"],
                                     "Start": r["start"],
                                     "Finish": r["finish"],
                                     "Duration": r["duration_label"],
                                     "Show": str(r["show"]),
                                 }
-                                for r in week_rows
+                                for r in day_rows
                             ]
                         )
-                        st.caption(
-                            "Click `Pick` on the blocks you want to swap. Selections persist when you change Preview week."
-                        )
-                        edited = st.data_editor(
-                            editor_df,
-                            hide_index=True,
-                            use_container_width=True,
-                            height=340,
-                            disabled=["Date", "Start", "Finish", "Duration", "Show"],
-                            key="build_oto_slot_editor",
-                        )
-                        week_selected = set()
-                        try:
-                            for i, row in edited.iterrows():
-                                if bool(row.get("Pick")):
-                                    week_selected.add(str(week_rows[int(i)]["slot_id"]))
-                        except Exception:
-                            week_selected = set()
-                        week_slot_ids = {str(r["slot_id"]) for r in week_rows}
-                        merged_selected = (prior_selected - week_slot_ids) | week_selected
+                        day_slot_ids = [str(r["slot_id"]) for r in day_rows]
+                        day_selected_ids: set[str] = set()
+                        if _dataframe_row_selection_supported():
+                            event = st.dataframe(
+                                day_df,
+                                use_container_width=True,
+                                height=340,
+                                hide_index=True,
+                                on_select="rerun",
+                                selection_mode="multi-row",
+                                key=f"build_oto_slot_select_{preview_week}_{day_pick}",
+                            )
+                            picked_rows: list[int] = []
+                            try:
+                                picked_rows = list(event["selection"]["rows"])  # type: ignore[index]
+                            except (KeyError, TypeError, AttributeError):
+                                picked_rows = []
+                            day_selected_ids = {
+                                day_slot_ids[int(i)]
+                                for i in picked_rows
+                                if isinstance(i, int) and 0 <= int(i) < len(day_slot_ids)
+                            }
+                        else:
+                            picked = st.multiselect(
+                                "Pick blocks",
+                                day_slot_ids,
+                                format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
+                                key=f"build_oto_day_multi_{preview_week}_{day_pick}",
+                            )
+                            day_selected_ids = {sid for sid in picked if sid in slot_by_id}
+                        merged_selected = (prior_selected - set(day_slot_ids)) | day_selected_ids
                         st.session_state["build_oto_slot_ids"] = [sid for sid in slot_ids if sid in merged_selected]
                         oto_ids = st.session_state["build_oto_slot_ids"]
                     else:
