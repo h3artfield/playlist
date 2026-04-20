@@ -2079,7 +2079,11 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
             st.session_state.pop(k, None)
         # Clear per-day editor/multiselect widget state tied to the old build scope.
         for k in list(st.session_state.keys()):
-            if k.startswith("build_oto_slot_editor_") or k.startswith("build_oto_day_multi_"):
+            if (
+                k.startswith("build_oto_slot_editor_")
+                or k.startswith("build_oto_day_multi_")
+                or k.startswith("build_oto_pick_slot_")
+            ):
                 st.session_state.pop(k, None)
         st.session_state["_build_scope_key"] = scope_key
 
@@ -2178,36 +2182,19 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                         st.caption(
                             "Click rows to select blocks. Selections persist across day/week changes."
                         )
-                        day_df = pd.DataFrame(
-                            [
-                                {
-                                    "Pick": str(r["slot_id"]) in prior_selected,
-                                    "Date": r["date_iso"],
-                                    "Start": r["start"],
-                                    "Finish": r["finish"],
-                                    "Duration": r["duration_label"],
-                                    "Show": str(r["show"]),
-                                }
-                                for r in day_rows
-                            ]
-                        )
                         day_slot_ids = [str(r["slot_id"]) for r in day_rows]
                         day_selected_ids: set[str] = set()
-                        editor_key = f"build_oto_slot_editor_{preview_week}_{day_pick}"
-                        edited = st.data_editor(
-                            day_df,
-                            hide_index=True,
-                            use_container_width=True,
-                            height=340,
-                            disabled=["Date", "Start", "Finish", "Duration", "Show"],
-                            key=editor_key,
-                        )
-                        try:
-                            for i, row in edited.iterrows():
-                                if bool(row.get("Pick")) and 0 <= int(i) < len(day_slot_ids):
-                                    day_selected_ids.add(day_slot_ids[int(i)])
-                        except Exception:
-                            day_selected_ids = {sid for sid in day_slot_ids if sid in prior_selected}
+                        for r in day_rows:
+                            sid = str(r["slot_id"])
+                            cb_key = f"build_oto_pick_slot_{sid}"
+                            if cb_key not in st.session_state:
+                                st.session_state[cb_key] = sid in prior_selected
+                            label = (
+                                f"{r['start']}-{r['finish']} ({r['duration_label']}) · "
+                                f"{str(r['show'])} · {r['date_iso']}"
+                            )
+                            if st.checkbox(label, key=cb_key):
+                                day_selected_ids.add(sid)
                         merged_selected = (prior_selected - set(day_slot_ids)) | day_selected_ids
                         st.session_state["build_oto_slot_ids"] = [sid for sid in slot_ids if sid in merged_selected]
                         oto_ids = st.session_state["build_oto_slot_ids"]
