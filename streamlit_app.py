@@ -1448,6 +1448,38 @@ def _movie_program_picker_options(
     return uniq
 
 
+def _auto_movie_candidates(
+    cfg,
+    cfg_path: Path,
+    extra_tab_names: list[str],
+    template_slots: list[dict[str, Any]],
+    nikki_path: Path,
+    source_group: str,
+) -> list[str]:
+    """Movie/program candidates for auto-swap, preferring semantic and movie-like matches."""
+    movie_opts = _movie_program_picker_options(cfg, extra_tab_names, template_slots, nikki_path)
+    if not movie_opts:
+        return []
+    movie_groups = _movie_semantic_groups(str(cfg_path.resolve()))
+    candidates: list[str] = []
+    if source_group:
+        candidates = [
+            opt
+            for opt in movie_opts
+            if (_semantic_group_for_archive_option(cfg, opt, movie_groups) or "") == source_group
+        ]
+    if not candidates:
+        # Fallback to movie-like titles (typically include a year) before generic literals.
+        movie_like = [
+            opt
+            for opt in movie_opts
+            if re.search(r"\((19|20)\d{2}\)", _display_name_for_archive_pick(cfg, opt))
+        ]
+        candidates = movie_like if movie_like else list(movie_opts)
+    uniq = sorted(set(candidates), key=lambda opt: _display_name_for_archive_pick(cfg, opt).casefold())
+    return uniq
+
+
 def _literal_options_from_slots(cfg, slots: list[dict[str, Any]]) -> list[str]:
     """Distinct literal show labels discovered in schedule slots."""
     opts: list[str] = []
@@ -2389,6 +2421,8 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     oto_source_group = ""
     oto_source_keys: set[str] = set()
     oto_fill_mode = "Auto-populate matching genre show"
+    oto_fill_choice = "auto_show"
+    oto_manual_replace_kind = "show"
     oto_episode_rows: list[dict[str, Any]] = []
     oto_manual_pool: list[dict[str, Any]] = []
     oto_manual_start_idx: Optional[int] = None
@@ -2487,18 +2521,35 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 if src_groups:
                     oto_source_group = sorted(src_groups)[0]
                     st.caption(f"Semantic source group: `{oto_source_group}`")
-            mode_opts = [
-                "Auto-populate matching genre show",
-                "Auto-populate matching genre movie/program",
-                "Manual: show > season > episode",
-                "Replace time window with movie list",
-            ]
-            oto_fill_mode = st.radio(
-                "OTO fill mode",
-                mode_opts,
+            oto_fill_choice = st.radio(
+                "OTO swap choice",
+                ("auto_show", "auto_movie", "manual_replace"),
+                format_func=lambda v: {
+                    "auto_show": "Auto-swap with shows",
+                    "auto_movie": "Auto-swap with movies",
+                    "manual_replace": "Manual replace",
+                }.get(str(v), str(v)),
                 horizontal=True,
                 key="build_oto_fill_mode",
             )
+            if oto_fill_choice == "manual_replace":
+                oto_manual_replace_kind = st.radio(
+                    "Manual replace with",
+                    ("show", "movie"),
+                    format_func=lambda v: "Show (show > season > episode)" if v == "show" else "Movie/program",
+                    horizontal=True,
+                    key="build_oto_manual_replace_kind",
+                )
+                oto_fill_mode = (
+                    "Manual: show > season > episode"
+                    if oto_manual_replace_kind == "show"
+                    else "Replace time window with movie list"
+                )
+            elif oto_fill_choice == "auto_show":
+                oto_fill_mode = "Auto-populate matching genre show"
+            else:
+                oto_fill_mode = "Auto-populate matching genre movie/program"
+
             if oto_fill_mode == "Manual: show > season > episode":
                 if archive_options:
                     oto_pick = st.selectbox(
@@ -2733,19 +2784,26 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 else:
                     st.warning("No movie/program entries were found in the archive list.")
             else:
-                auto_movie_opts = _semantic_candidates(
+                auto_movie_opts = _auto_movie_candidates(
                     cfg,
-                    group=oto_source_group,
-                    kind="literal",
-                    exclude_keys=set(),
+                    cfg_path,
+                    extra_tab_names,
+                    template_slots,
+                    nikki,
+                    oto_source_group,
                 )
-                if not auto_movie_opts:
-                    auto_movie_opts = _semantic_candidates(cfg, group="", kind="literal", exclude_keys=set())
                 if auto_movie_opts:
                     oto_pick = auto_movie_opts[0]
-                    pick_group = getattr(cfg.shows[oto_pick], "semantic_group", None) or "unlabeled"
+                    pick_group = (
+                        _semantic_group_for_archive_option(
+                            cfg,
+                            oto_pick,
+                            _movie_semantic_groups(str(cfg_path.resolve())),
+                        )
+                        or "unlabeled"
+                    )
                     st.caption(
-                        f"Auto-picked matching genre movie/program: **{cfg.shows[oto_pick].display_name}** (`{pick_group}`)."
+                        f"Auto-picked matching genre movie/program: **{_display_name_for_archive_pick(cfg, oto_pick)}** (`{pick_group}`)."
                     )
                 else:
                     st.warning("No related movie/program candidates were found for auto-populate.")
@@ -2893,6 +2951,12 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     )
     if use_oto:
         oto_dur = _format_duration_minutes(sum(int(r["duration_minutes"]) for r in oto_rows)) if oto_rows else "0m"
+        oto_mode_label = {
+            "Auto-populate matching genre show": "Auto-swap with shows",
+            "Auto-populate matching genre movie/program": "Auto-swap with movies",
+            "Manual: show > season > episode": "Manual replace (show)",
+            "Replace time window with movie list": "Manual replace (movie/program)",
+        }.get(oto_fill_mode, oto_fill_mode)
         if oto_fill_mode == "Replace time window with movie list":
             assigned = [oto_movie_by_slot.get(str(r["slot_id"])) for r in sorted(oto_rows, key=lambda r: (r["date_iso"], int(r["start_slot"])))]
             assigned = [a for a in assigned if a]
@@ -2900,7 +2964,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         else:
             oto_name = _display_name_for_archive_pick(cfg, oto_pick) if oto_pick else "—"
         st.markdown(
-            f"- OTO: **{len(oto_rows)}** block(s), duration **{oto_dur}**, replacement **{oto_name}**, mode **{oto_fill_mode}**"
+            f"- OTO: **{len(oto_rows)}** block(s), duration **{oto_dur}**, replacement **{oto_name}**, mode **{oto_mode_label}**"
         )
         if oto_timing_notes:
             st.markdown(f"- OTO timing notes: **{len(oto_timing_notes)}**")
