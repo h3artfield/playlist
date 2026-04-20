@@ -369,13 +369,15 @@ def _mobile_styles() -> None:
 
 
 _NAV_BUILD = "Build schedule"
-_NAV_ARCHIVE = "View content archive"
+_NAV_ARCHIVE = "Available Content"
 _NAV_EDIT_SCHEDULE = "Edit schedules"
 _MAIN_NAV_OPTIONS = (_NAV_BUILD, _NAV_ARCHIVE, _NAV_EDIT_SCHEDULE)
 _LEGACY_MAIN_NAV_TAB: dict[str, str] = {
     "Build": _NAV_BUILD,
     "Build playlist": _NAV_BUILD,
     "Content archive": _NAV_ARCHIVE,
+    "View content archive": _NAV_ARCHIVE,
+    "Available Content": _NAV_ARCHIVE,
     "Playlist": _NAV_EDIT_SCHEDULE,
     "Edit playlist": _NAV_EDIT_SCHEDULE,
     "Edit playlists": _NAV_EDIT_SCHEDULE,
@@ -1234,6 +1236,62 @@ def _semantic_group_for_show(cfg, show_key: str) -> str:
     return str(getattr(sd, "semantic_group", None) or "").strip().lower()
 
 
+def _title_key_variants(text: str) -> set[str]:
+    s = " ".join(str(text or "").strip().lower().split())
+    if not s:
+        return set()
+    out = {s}
+    no_year = re.sub(r"\s*\((19|20)\d{2}\)\s*$", "", s).strip()
+    if no_year:
+        out.add(no_year)
+    for cur in list(out):
+        m = re.match(r"^(.*?),\s*(the|a|an)$", cur)
+        if m:
+            out.add(f"{m.group(2)} {m.group(1)}".strip())
+    return {x for x in out if x}
+
+
+@st.cache_data(show_spinner=False)
+def _movie_semantic_groups(cfg_path_str: str) -> dict[str, str]:
+    """Optional movie semantic-group map from config/movie_semantic_groups.json."""
+    cfg_path = Path(cfg_path_str)
+    cfg_dir = cfg_path.resolve().parent
+    repo_root = cfg_dir.parent if cfg_dir.name.casefold() == "config" else cfg_dir
+    p = repo_root / "config" / "movie_semantic_groups.json"
+    if not p.is_file():
+        return {}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        g = str(v or "").strip().lower()
+        if not g:
+            continue
+        for kk in _title_key_variants(str(k)):
+            out[kk] = g
+    return out
+
+
+def _semantic_group_for_archive_option(
+    cfg,
+    opt: str,
+    movie_groups: dict[str, str],
+) -> str:
+    if opt in cfg.shows:
+        return str(getattr(cfg.shows[opt], "semantic_group", None) or "").strip().lower()
+    raw_literal = _parse_literal_text_option(opt)
+    title = raw_literal if raw_literal is not None else _display_name_for_archive_pick(cfg, opt)
+    for kk in _title_key_variants(title):
+        g = movie_groups.get(kk)
+        if g:
+            return g
+    return ""
+
+
 def _semantic_candidates(cfg, *, group: str, kind: str, exclude_keys: set[str]) -> list[str]:
     out: list[str] = []
     for k, sd in cfg.shows.items():
@@ -1455,7 +1513,7 @@ def _render_binge_grids_preview(
                 "you want from the archive. **Time and day stay the same** — only the program in that slot changes in your **grids** "
                 "(and the setup file if the show is new). Run **Create BINGE files** again on **Build schedule** so the spreadsheet matches."
             )
-            st.caption("One row → **Swap for… → View content archive** → confirm.")
+            st.caption("One row → **Swap for… → Available Content** → confirm.")
             if picked_row_idx is not None:
                 sv = binge_df.iloc[picked_row_idx][show_col]
                 show_val = str(sv).strip() if pd.notna(sv) else ""
@@ -1547,7 +1605,7 @@ def _render_binge_grids_preview(
                     st.caption("Select one or more BINGE rows above to enable block swap.")
 
             if st.button(
-                "Swap for… → View content archive",
+                "Swap for… → Available Content",
                 type="secondary",
                 use_container_width=True,
                 key=f"{key_prefix}_swap_open_archive",
@@ -1612,8 +1670,8 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
             ctx_bits.append(f"row **{row_hint}**")
         ctx_suffix = f" ({', '.join(ctx_bits)})" if ctx_bits else ""
         st.info(
-            f"**Swap:** Under **Pick a show**, choose the program you want in that **same time slot**, then "
-            f"**Use selected show as replacement**. "
+            f"**Swap:** Under **Pick content**, choose the program you want in that **same time slot**, then "
+            f"**Use selected content as replacement**. "
             f"Current label: **{', '.join(olds)}**{ctx_suffix}."
         )
 
@@ -1680,8 +1738,27 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
     else:
         option_keys = list(all_option_keys)
 
+    movie_groups = _movie_semantic_groups(str(cfg_path.resolve()))
+    genre_vals = sorted(
+        {
+            _semantic_group_for_archive_option(cfg, opt, movie_groups) or "unlabeled"
+            for opt in option_keys
+        }
+    )
+    genre_pick = st.selectbox(
+        "Genre filter",
+        ["All genres"] + genre_vals,
+        key="archive_genre_filter",
+    )
+    if genre_pick != "All genres":
+        option_keys = [
+            opt
+            for opt in option_keys
+            if (_semantic_group_for_archive_option(cfg, opt, movie_groups) or "unlabeled") == genre_pick
+        ]
+
     if not option_keys:
-        st.info("No shows to list from this setup.")
+        st.info("No content matches the current archive/genre filters.")
         return
 
     def _archive_option_label(opt: str) -> str:
@@ -1696,26 +1773,28 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
         kind = "movie/program" if sd.kind == "literal" else "series"
         return f"{sd.display_name} _({kind})_"
 
+    none_opt = "__none__"
+    select_opts = [none_opt] + option_keys
     prior_pick = st.session_state.get("archive_show_pick")
-    if prior_pick is not None and prior_pick not in option_keys:
-        st.session_state["archive_show_pick"] = option_keys[0]
+    if prior_pick not in select_opts:
+        st.session_state["archive_show_pick"] = none_opt
 
     sel = st.selectbox(
-        "Pick a show",
-        option_keys,
-        format_func=_archive_option_label,
+        "Pick content",
+        select_opts,
+        format_func=lambda opt: "— Select content —" if opt == none_opt else _archive_option_label(opt),
         key="archive_show_pick",
     )
     if swap_ctx:
         if st.button(
-            "Use selected show as replacement",
+            "Use selected content as replacement",
             type="primary",
             use_container_width=True,
             key="archive_swap_confirm",
         ):
             pick = st.session_state.get("archive_show_pick")
-            if not pick:
-                st.warning("Pick a show in the list first.")
+            if not pick or pick == none_opt:
+                st.warning("Pick content in the list first.")
             else:
                 ok, swap_msgs = apply_show_swap(
                     cfg_path,
@@ -1757,6 +1836,10 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
         ):
             st.session_state.pop("swap_context", None)
             st.rerun()
+
+    if sel == none_opt:
+        st.caption("Choose a show/movie/program to view details.")
+        return
 
     raw_literal = _parse_literal_text_option(sel)
     tab_only = parse_workbook_tab_option(sel)
