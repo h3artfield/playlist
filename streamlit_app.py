@@ -12,6 +12,7 @@ import inspect
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import tempfile
@@ -50,6 +51,8 @@ from binge_schedule.workbook_discover import (
     workbook_tabs_not_in_yaml,
     workbook_tab_option,
 )
+
+_RAW_LITERAL_PREFIX = "__literal_text__:"
 
 
 def _default_config_display() -> str:
@@ -1026,6 +1029,9 @@ def _binge_row_swap_summary(df: pd.DataFrame, idx: int) -> str:
 
 
 def _display_name_for_archive_pick(cfg, sel: str) -> str:
+    raw_literal = _parse_literal_text_option(sel)
+    if raw_literal is not None:
+        return raw_literal
     tab = parse_workbook_tab_option(sel)
     if tab is not None:
         return synthetic_series_for_tab(tab).display_name
@@ -1033,10 +1039,37 @@ def _display_name_for_archive_pick(cfg, sel: str) -> str:
 
 
 def _showdef_for_archive_pick(cfg, sel: str) -> Optional[ShowDef]:
+    raw_literal = _parse_literal_text_option(sel)
+    if raw_literal is not None:
+        return ShowDef(key="literal", display_name=raw_literal, kind="literal")
     tab = parse_workbook_tab_option(sel)
     if tab is not None:
         return synthetic_series_for_tab(tab)
     return cfg.shows.get(sel)
+
+
+def _literal_text_option(text: str) -> str:
+    return f"{_RAW_LITERAL_PREFIX}{str(text).strip()}"
+
+
+def _parse_literal_text_option(opt: str) -> Optional[str]:
+    if not isinstance(opt, str):
+        return None
+    if opt.startswith(_RAW_LITERAL_PREFIX):
+        raw = opt[len(_RAW_LITERAL_PREFIX) :].strip()
+        return raw or None
+    return None
+
+
+def _looks_like_movie_program_name(name: str) -> bool:
+    s = str(name or "").strip()
+    if not s:
+        return False
+    if re.search(r"\((19|20)\d{2}\)", s):
+        return True
+    if re.search(r"\b(19|20)\d{2}\b", s):
+        return True
+    return False
 
 
 def _episode_rows_for_archive_pick(cfg, sel: str, nikki_path: Path) -> list[dict[str, Any]]:
@@ -1099,10 +1132,24 @@ def _semantic_candidates(cfg, *, group: str, kind: str, exclude_keys: set[str]) 
     return out
 
 
-def _movie_program_picker_options(cfg, extra_tab_names: list[str]) -> list[str]:
-    """Movie/program options from config + archive-only tabs, sorted alphabetically."""
+def _movie_program_picker_options(
+    cfg,
+    extra_tab_names: list[str],
+    template_slots: list[dict[str, Any]],
+) -> list[str]:
+    """Movie/program options from config, movie-like archive tabs, and literal slot labels."""
     opts: list[str] = [k for k, sd in cfg.shows.items() if sd.kind == "literal"]
-    opts.extend(workbook_tab_option(t) for t in extra_tab_names)
+    opts.extend(workbook_tab_option(t) for t in extra_tab_names if _looks_like_movie_program_name(t))
+    for row in template_slots:
+        show_text = str(row.get("show", "")).strip()
+        if not show_text:
+            continue
+        _, sd = resolve_show(show_text, cfg.shows)
+        if sd is not None and sd.kind == "series":
+            continue
+        if sd is not None and sd.kind == "literal" and show_text == sd.display_name.strip():
+            continue
+        opts.append(_literal_text_option(show_text))
     uniq: list[str] = []
     seen: set[str] = set()
     for opt in opts:
@@ -1405,17 +1452,50 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
         extra_tab_names = workbook_tabs_not_in_yaml(cfg, tabs)
     extra_opts = [workbook_tab_option(t) for t in extra_tab_names]
 
-    option_keys = yaml_keys + extra_opts
+    all_option_keys = yaml_keys + extra_opts
+    archive_view = st.radio(
+        "Archive view",
+        ("All", "Shows (series)", "Movies/programs"),
+        horizontal=True,
+        key="archive_view_filter",
+    )
+
+    def _is_movie_option(opt: str) -> bool:
+        raw_literal = _parse_literal_text_option(opt)
+        if raw_literal is not None:
+            return True
+        tab = parse_workbook_tab_option(opt)
+        if tab is not None:
+            return _looks_like_movie_program_name(tab)
+        sd = cfg.shows.get(opt)
+        return bool(sd and sd.kind == "literal")
+
+    if archive_view == "Shows (series)":
+        option_keys = [opt for opt in all_option_keys if not _is_movie_option(opt)]
+    elif archive_view == "Movies/programs":
+        option_keys = [opt for opt in all_option_keys if _is_movie_option(opt)]
+    else:
+        option_keys = list(all_option_keys)
 
     if not option_keys:
         st.info("No shows to list from this setup.")
         return
 
     def _archive_option_label(opt: str) -> str:
+        raw_literal = _parse_literal_text_option(opt)
+        if raw_literal is not None:
+            return f"{raw_literal} _(from schedule)_"
         tab = parse_workbook_tab_option(opt)
         if tab is not None:
-            return f"{tab} _(not on schedule)_"
-        return cfg.shows[opt].display_name
+            suffix = "movie/program tab" if _looks_like_movie_program_name(tab) else "not on schedule"
+            return f"{tab} _({suffix})_"
+        sd = cfg.shows[opt]
+        kind = "movie/program" if sd.kind == "literal" else "series"
+        return f"{sd.display_name} _({kind})_"
+
+    prior_pick = st.session_state.get("archive_show_pick")
+    if prior_pick is not None and prior_pick not in option_keys:
+        st.session_state["archive_show_pick"] = option_keys[0]
 
     sel = st.selectbox(
         "Pick a show",
@@ -1475,14 +1555,25 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
             st.session_state.pop("swap_context", None)
             st.rerun()
 
+    raw_literal = _parse_literal_text_option(sel)
     tab_only = parse_workbook_tab_option(sel)
-    if tab_only is not None:
-        st.caption(f"Excel tab `{tab_only}` — **not on schedule**")
+    if raw_literal is not None:
+        st.caption("Literal title pulled from schedule content.")
+    elif tab_only is not None:
+        if _looks_like_movie_program_name(tab_only):
+            st.caption(f"Excel tab `{tab_only}` — movie/program tab (not on schedule)")
+        else:
+            st.caption(f"Excel tab `{tab_only}` — **not on schedule**")
     else:
         st.caption(f"Schedule entry `{sel}`")
 
-    browse_only = tab_only is not None
-    sd = synthetic_series_for_tab(tab_only) if browse_only else cfg.shows[sel]
+    browse_only = tab_only is not None and raw_literal is None
+    if raw_literal is not None:
+        sd = ShowDef(key="literal", display_name=raw_literal, kind="literal")
+    elif browse_only and _looks_like_movie_program_name(tab_only or ""):
+        sd = ShowDef(key="literal", display_name=str(tab_only), kind="literal")
+    else:
+        sd = synthetic_series_for_tab(tab_only) if browse_only else cfg.shows[sel]
     with _archive_detail_panel():
         st.markdown(f"## {sd.display_name}")
         if browse_only:
@@ -1872,6 +1963,9 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     current_show_options = sorted({str(r["show"]).strip() for r in template_slots if str(r["show"]).strip()})
 
     def _archive_pick_label(opt: str) -> str:
+        raw_literal = _parse_literal_text_option(opt)
+        if raw_literal is not None:
+            return f"{raw_literal} _(from schedule)_"
         tab = parse_workbook_tab_option(opt)
         if tab is not None:
             return f"{tab} _(not on schedule)_"
@@ -2088,7 +2182,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 else:
                     st.warning("No related series candidates were found for auto-populate.")
             elif oto_fill_mode == "Replace time window with movie list":
-                movie_opts = _movie_program_picker_options(cfg, extra_tab_names)
+                movie_opts = _movie_program_picker_options(cfg, extra_tab_names, template_slots)
                 max_titles = max(0, len(oto_rows))
                 st.caption(
                     f"Pick up to **{max_titles}** titles from the archive (A-Z). "
