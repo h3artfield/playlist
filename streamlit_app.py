@@ -1831,7 +1831,13 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     # Reset change pickers when build window changes, so OTO/mass can never carry stale weeks.
     scope_key = f"{start_date.isoformat()}|{week_count}|{'|'.join(selected_mondays)}"
     if st.session_state.get("_build_scope_key") != scope_key:
-        for k in ("build_oto_slot_ids", "build_mass_seed_ids", "build_oto_movie_list_keys"):
+        for k in (
+            "build_oto_slot_ids",
+            "build_mass_seed_ids",
+            "build_oto_movie_list_keys",
+            "build_oto_preview_week",
+            "build_oto_slot_editor",
+        ):
             st.session_state.pop(k, None)
         st.session_state["_build_scope_key"] = scope_key
 
@@ -1894,14 +1900,72 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                     oto_rows = [r for r in template_slots if r["show"] == oto_source_show]
                     st.caption(f"Selected **{len(oto_rows)}** block(s) for `{oto_source_show}`.")
             else:
-                oto_ids = st.multiselect(
-                    "OTO: choose time blocks",
-                    slot_ids,
-                    format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
-                    key="build_oto_slot_ids",
+                picker_ui = st.radio(
+                    "OTO block picker",
+                    ("Clickable schedule preview", "Quick list picker"),
+                    horizontal=True,
+                    key="build_oto_picker_ui",
                 )
+                if picker_ui == "Clickable schedule preview":
+                    week_opts = sorted({str(r["week_monday"]) for r in template_slots})
+                    preview_week = st.selectbox(
+                        "Preview week",
+                        week_opts,
+                        key="build_oto_preview_week",
+                    )
+                    prior_selected = {
+                        sid for sid in st.session_state.get("build_oto_slot_ids", []) if sid in slot_by_id
+                    }
+                    week_rows = [r for r in template_slots if str(r["week_monday"]) == str(preview_week)]
+                    week_rows.sort(key=lambda r: (r["date_iso"], int(r["start_slot"])))
+                    if week_rows:
+                        editor_df = pd.DataFrame(
+                            [
+                                {
+                                    "Pick": r["slot_id"] in prior_selected,
+                                    "Date": r["date_iso"],
+                                    "Start": r["start"],
+                                    "Finish": r["finish"],
+                                    "Duration": r["duration_label"],
+                                    "Show": str(r["show"]),
+                                }
+                                for r in week_rows
+                            ]
+                        )
+                        st.caption(
+                            "Click `Pick` on the blocks you want to swap. Selections persist when you change Preview week."
+                        )
+                        edited = st.data_editor(
+                            editor_df,
+                            hide_index=True,
+                            use_container_width=True,
+                            height=340,
+                            disabled=["Date", "Start", "Finish", "Duration", "Show"],
+                            key="build_oto_slot_editor",
+                        )
+                        week_selected = set()
+                        try:
+                            for i, row in edited.iterrows():
+                                if bool(row.get("Pick")):
+                                    week_selected.add(str(week_rows[int(i)]["slot_id"]))
+                        except Exception:
+                            week_selected = set()
+                        week_slot_ids = {str(r["slot_id"]) for r in week_rows}
+                        merged_selected = (prior_selected - week_slot_ids) | week_selected
+                        st.session_state["build_oto_slot_ids"] = [sid for sid in slot_ids if sid in merged_selected]
+                        oto_ids = st.session_state["build_oto_slot_ids"]
+                    else:
+                        oto_ids = []
+                else:
+                    oto_ids = st.multiselect(
+                        "OTO: choose time blocks",
+                        slot_ids,
+                        format_func=lambda sid: _slot_picker_label(slot_by_id[sid]),
+                        key="build_oto_slot_ids",
+                    )
                 oto_ids = [sid for sid in oto_ids if sid in slot_by_id]
                 oto_rows = [slot_by_id[sid] for sid in oto_ids]
+                st.caption(f"Selected **{len(oto_rows)}** block(s) for OTO.")
             if oto_rows:
                 oto_source_keys = {
                     k for k in (_slot_source_show_key(cfg, r["show"]) for r in oto_rows) if k is not None
