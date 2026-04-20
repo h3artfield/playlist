@@ -940,6 +940,35 @@ def _map_output_grid_tabs_by_monday(grids_path: Path) -> dict[str, str]:
     return out
 
 
+def _remerge_output_grid_day_column(ws: Any, col: int) -> None:
+    """Rebuild vertical merges for one day column in rows 5..52."""
+    min_row, max_row = 5, 52
+    # Remove existing merges that touch this day column in the schedule row band.
+    for mr in list(ws.merged_cells.ranges):
+        if mr.max_row < min_row or mr.min_row > max_row:
+            continue
+        if mr.min_col <= col <= mr.max_col:
+            ws.unmerge_cells(str(mr))
+
+    def _norm(v: Any) -> str:
+        if v is None:
+            return ""
+        s = str(v).strip()
+        return s
+
+    r = min_row
+    while r <= max_row:
+        cur = _norm(ws.cell(row=r, column=col).value)
+        end = r
+        while end + 1 <= max_row and _norm(ws.cell(row=end + 1, column=col).value) == cur:
+            end += 1
+        if cur and end > r:
+            for rr in range(r + 1, end + 1):
+                ws.cell(row=rr, column=col, value=None)
+            ws.merge_cells(start_row=r, start_column=col, end_row=end, end_column=col)
+        r = end + 1
+
+
 def _apply_output_grid_slot_replacements(
     grids_path: Path,
     slot_rows: list[dict[str, Any]],
@@ -958,6 +987,7 @@ def _apply_output_grid_slot_replacements(
     except OSError as e:
         return [f"OTO grids update skipped: could not open `{grids_path}` ({e})."]
     changed = 0
+    touched_cols_by_tab: dict[str, set[int]] = {}
     try:
         for r in slot_rows:
             d = r["date"]
@@ -967,9 +997,16 @@ def _apply_output_grid_slot_replacements(
                 continue
             ws = wb[tab]
             col = 2 + int(r["day_index"])
+            touched_cols_by_tab.setdefault(tab, set()).add(col)
             for slot in range(int(r["start_slot"]), int(r["end_slot"])):
                 ws.cell(row=5 + slot, column=col, value=new_display)
                 changed += 1
+        for tab, cols in touched_cols_by_tab.items():
+            if tab not in wb.sheetnames:
+                continue
+            ws = wb[tab]
+            for col in cols:
+                _remerge_output_grid_day_column(ws, col)
         wb.save(grids_path)
     finally:
         wb.close()
@@ -995,6 +1032,7 @@ def _apply_output_grid_slot_replacements_multi(
     except OSError as e:
         return [f"OTO grids update skipped: could not open `{grids_path}` ({e})."]
     changed = 0
+    touched_cols_by_tab: dict[str, set[int]] = {}
     try:
         for i, r in enumerate(slot_rows):
             if i >= len(new_displays):
@@ -1009,9 +1047,16 @@ def _apply_output_grid_slot_replacements_multi(
                 continue
             ws = wb[tab]
             col = 2 + int(r["day_index"])
+            touched_cols_by_tab.setdefault(tab, set()).add(col)
             for slot in range(int(r["start_slot"]), int(r["end_slot"])):
                 ws.cell(row=5 + slot, column=col, value=new_display)
                 changed += 1
+        for tab, cols in touched_cols_by_tab.items():
+            if tab not in wb.sheetnames:
+                continue
+            ws = wb[tab]
+            for col in cols:
+                _remerge_output_grid_day_column(ws, col)
         wb.save(grids_path)
     finally:
         wb.close()
