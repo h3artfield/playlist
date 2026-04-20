@@ -368,7 +368,7 @@ def _mobile_styles() -> None:
     )
 
 
-_NAV_BUILD = "Build schedule"
+_NAV_BUILD = "Create Schedule"
 _NAV_ARCHIVE = "Available Content"
 _NAV_EDIT_SCHEDULE = "Edit schedules"
 _MAIN_NAV_OPTIONS = (_NAV_BUILD, _NAV_ARCHIVE, _NAV_EDIT_SCHEDULE)
@@ -1511,7 +1511,7 @@ def _render_binge_grids_preview(
             st.info(
                 "**After the BINGE build:** select the **row** you’re replacing, then **Swap for…** and pick **whatever show** "
                 "you want from the archive. **Time and day stay the same** — only the program in that slot changes in your **grids** "
-                "(and the setup file if the show is new). Run **Create BINGE files** again on **Build schedule** so the spreadsheet matches."
+                "(and the setup file if the show is new). Run **Create BINGE files** again on **Create Schedule** so the spreadsheet matches."
             )
             st.caption("One row → **Swap for… → Available Content** → confirm.")
             if picked_row_idx is not None:
@@ -1939,7 +1939,7 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
             st.metric("Kind", "Literal")
             st.caption(
                 "To swap a literal slot, edit the grid Excel for that week or change how the cell text "
-                "maps to **display_name** in your setup—use **Build schedule** to confirm names match."
+                "maps to **display_name** in your setup—use **Create Schedule** to confirm names match."
             )
 
 
@@ -2027,13 +2027,13 @@ def _render_schedule_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
         elif sr.get("auto_export_ok") is False:
             st.success(
                 f"**Grids updated** for that slot: **{', '.join(sr['old_show_labels'])}** → **{sr['new_display']}** "
-                f"(`{sr['archive_pick']}`). **BINGE export** did not run automatically — use **Create BINGE files** on **Build schedule**, "
+                f"(`{sr['archive_pick']}`). **BINGE export** did not run automatically — use **Create BINGE files** on **Create Schedule**, "
                 "or see *What changed* for details."
             )
         else:
             st.success(
                 f"**Grids updated** for that slot: **{', '.join(sr['old_show_labels'])}** → **{sr['new_display']}** "
-                f"(`{sr['archive_pick']}`). Run **Create BINGE files** on **Build schedule** to refresh **BINGE.xlsx**."
+                f"(`{sr['archive_pick']}`). Run **Create BINGE files** on **Create Schedule** to refresh **BINGE.xlsx**."
             )
         msgs = sr.get("messages") or []
         if msgs:
@@ -2046,7 +2046,7 @@ def _render_schedule_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
         st.divider()
 
     st.markdown(
-        "Your latest export is here and on **Build schedule**. Below: pick the **BINGE row** to replace, then choose the **archive** show — "
+        "Your latest export is here and on **Create Schedule**. Below: pick the **BINGE row** to replace, then choose the **archive** show — "
         "**clock times stay put**; grids update for the next build."
     )
     candidates = _schedule_workbook_candidates(cfg_path)
@@ -2099,7 +2099,7 @@ def _render_schedule_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
         )
 
     if "binge_path" not in st.session_state:
-        st.info("Nothing generated yet — go to **Build schedule** and run **Create BINGE files**.")
+        st.info("Nothing generated yet — go to **Create Schedule** and run **Create BINGE files**.")
     else:
         st.markdown("##### Latest files")
         _render_last_build_outputs(cfg, cfg_path)
@@ -2115,7 +2115,7 @@ def _render_schedule_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
     st.markdown("##### Make changes")
     st.caption(
         "**Edit schedules** in your sources: episodes, order, and show keys live in the setup YAML and Nikki spreadsheet — "
-        "not only inside the export files. Edit those, then run **Create BINGE files** again on **Build schedule**."
+        "not only inside the export files. Edit those, then run **Create BINGE files** again on **Create Schedule**."
     )
     setup_abs = cfg_path.resolve()
     st.markdown(f"- **Setup (YAML):** `{setup_abs}`")
@@ -2187,7 +2187,6 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
             st.session_state.pop(k, None)
     st.session_state["_build_month_iso"] = cur_m
 
-    st.markdown("##### Build options")
     min_day = parse_monday(buildable_weeks[0].monday)
     max_day = parse_monday(buildable_weeks[-1].monday) + timedelta(days=6)
     default_start = parse_monday(buildable_weeks[0].monday)
