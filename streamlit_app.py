@@ -497,6 +497,52 @@ def _archive_sheet_episodes(
     return normalize_episodes_for_archive(eps, style)
 
 
+def _nikki_movies_sheet_name(nikki_path: Path) -> Optional[str]:
+    if not nikki_path.is_file():
+        return None
+    tabs = _nikki_workbook_sheet_names(str(nikki_path.resolve()), _nikki_mtime(nikki_path))
+    for t in tabs:
+        if str(t).strip().casefold() == "movies":
+            return str(t)
+    return None
+
+
+@st.cache_data(show_spinner=False)
+def _nikki_movie_catalog_titles(workbook: str, _workbook_mtime: float, movies_sheet: str) -> list[str]:
+    hdrs = NikkiColumnHeaders.movies_tab()
+    rows = _archive_sheet_episodes(
+        workbook,
+        _workbook_mtime,
+        movies_sheet,
+        "movies",
+        "MOV",
+        None,
+        json.dumps(asdict(hdrs), sort_keys=True),
+    )
+    out: list[str] = []
+    seen: set[str] = set()
+    for r in rows:
+        title = str(r.get("title") or "").strip()
+        if not title or title in seen:
+            continue
+        seen.add(title)
+        out.append(title)
+    out.sort(key=str.casefold)
+    return out
+
+
+def _nikki_movie_catalog_options(nikki_path: Path) -> list[str]:
+    movies_sheet = _nikki_movies_sheet_name(nikki_path)
+    if not movies_sheet:
+        return []
+    titles = _nikki_movie_catalog_titles(
+        str(nikki_path.resolve()),
+        _nikki_mtime(nikki_path),
+        movies_sheet,
+    )
+    return [_literal_text_option(t) for t in titles]
+
+
 def _render_archive_episode_browser(
     sel: str,
     sd: ShowDef,
@@ -1136,10 +1182,12 @@ def _movie_program_picker_options(
     cfg,
     extra_tab_names: list[str],
     template_slots: list[dict[str, Any]],
+    nikki_path: Path,
 ) -> list[str]:
     """Movie/program options from config, movie-like archive tabs, and literal slot labels."""
     opts: list[str] = [k for k, sd in cfg.shows.items() if sd.kind == "literal"]
     opts.extend(workbook_tab_option(t) for t in extra_tab_names if _looks_like_movie_program_name(t))
+    opts.extend(_nikki_movie_catalog_options(nikki_path))
     for row in template_slots:
         show_text = str(row.get("show", "")).strip()
         if not show_text:
@@ -1181,6 +1229,37 @@ def _literal_options_from_slots(cfg, slots: list[dict[str, Any]]) -> list[str]:
         opts.append(token)
     opts.sort(key=lambda opt: _display_name_for_archive_pick(cfg, opt).casefold())
     return opts
+
+
+def _slot_rows_from_grids_workbook(path: Path) -> list[dict[str, Any]]:
+    """Extract slot-like rows from every week sheet in a GRIDS workbook."""
+    out: list[dict[str, Any]] = []
+    if not path.is_file():
+        return out
+    for sheet in _list_grids_data_sheets(path):
+        mon = parse_sheet_tab_monday(sheet)
+        if mon is None:
+            continue
+        try:
+            grid = load_grid_sheet(str(path), sheet)
+        except Exception:
+            continue
+        dates = day_dates(mon)
+        for day_idx in range(7):
+            col = [grid[r][day_idx] for r in range(48)]
+            try:
+                segs = segments_for_day(col)
+            except ValueError:
+                continue
+            for seg in segs:
+                out.append(
+                    {
+                        "show": str(seg.cell_text).strip(),
+                        "date_iso": dates[day_idx].isoformat(),
+                        "start_slot": int(seg.start_slot),
+                    }
+                )
+    return out
 
 
 def _grids_preview_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -1473,10 +1552,39 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
         tabs = _nikki_workbook_sheet_names(str(nikki_path.resolve()), _nikki_mtime(nikki_path))
         extra_tab_names = workbook_tabs_not_in_yaml(cfg, tabs)
     extra_opts = [workbook_tab_option(t) for t in extra_tab_names]
+    nikki_movie_opts = _nikki_movie_catalog_options(nikki_path)
     slot_rows, _slot_warn = _schedule_template_slots(cfg.weeks)
+    # Also include titles from known GRIDS outputs (e.g., recently generated files in out/).
+    grid_paths: list[Path] = []
+    seen_grids: set[str] = set()
+
+    def _add_grid_path(p: Path) -> None:
+        rp = str(p.resolve())
+        if rp in seen_grids:
+            return
+        seen_grids.add(rp)
+        grid_paths.append(p)
+
+    for w in cfg.weeks:
+        gp = Path(w.grids_file)
+        if not gp.is_absolute():
+            gp = (cfg_path.resolve().parent / gp).resolve()
+        if gp.is_file():
+            _add_grid_path(gp)
+    sess_gp = st.session_state.get("grids_path")
+    if sess_gp:
+        p = Path(str(sess_gp))
+        if p.is_file():
+            _add_grid_path(p)
+    for p in _schedule_workbook_candidates(cfg_path):
+        if "GRIDS" in p.name.upper():
+            _add_grid_path(p)
+    for gp in grid_paths:
+        slot_rows.extend(_slot_rows_from_grids_workbook(gp))
+
     slot_literal_opts = _literal_options_from_slots(cfg, slot_rows)
 
-    all_option_keys = yaml_keys + extra_opts + slot_literal_opts
+    all_option_keys = yaml_keys + extra_opts + slot_literal_opts + nikki_movie_opts
     archive_view = st.radio(
         "Archive view",
         ("All", "Shows (series)", "Movies/programs"),
@@ -2206,7 +2314,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 else:
                     st.warning("No related series candidates were found for auto-populate.")
             elif oto_fill_mode == "Replace time window with movie list":
-                movie_opts = _movie_program_picker_options(cfg, extra_tab_names, template_slots)
+                movie_opts = _movie_program_picker_options(cfg, extra_tab_names, template_slots, nikki)
                 max_titles = max(0, len(oto_rows))
                 st.caption(
                     f"Pick up to **{max_titles}** titles from the archive (A-Z). "
