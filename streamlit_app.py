@@ -928,6 +928,48 @@ def _apply_output_grid_slot_replacements(
     return msgs
 
 
+def _apply_output_grid_slot_replacements_multi(
+    grids_path: Path,
+    slot_rows: list[dict[str, Any]],
+    new_displays: list[str],
+) -> list[str]:
+    msgs: list[str] = []
+    if not grids_path.is_file():
+        return [f"OTO grids update skipped: output file missing `{grids_path}`."]
+    tab_by_monday = _map_output_grid_tabs_by_monday(grids_path)
+    if not tab_by_monday:
+        return [f"OTO grids update skipped: could not map week tabs in `{grids_path.name}`."]
+    try:
+        import openpyxl
+
+        wb = openpyxl.load_workbook(grids_path, read_only=False, data_only=False)
+    except OSError as e:
+        return [f"OTO grids update skipped: could not open `{grids_path}` ({e})."]
+    changed = 0
+    try:
+        for i, r in enumerate(slot_rows):
+            if i >= len(new_displays):
+                break
+            new_display = str(new_displays[i]).strip()
+            if not new_display:
+                continue
+            d = r["date"]
+            mon_key = _monday_for_calendar_date(d).isoformat()
+            tab = tab_by_monday.get(mon_key)
+            if not tab or tab not in wb.sheetnames:
+                continue
+            ws = wb[tab]
+            col = 2 + int(r["day_index"])
+            for slot in range(int(r["start_slot"]), int(r["end_slot"])):
+                ws.cell(row=5 + slot, column=col, value=new_display)
+                changed += 1
+        wb.save(grids_path)
+    finally:
+        wb.close()
+    msgs.append(f"OTO grids update: replaced {changed} output cell(s) in `{grids_path.name}`.")
+    return msgs
+
+
 def _list_xlsx_sheet_names(path: Path) -> list[str]:
     import openpyxl
 
@@ -1789,7 +1831,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     # Reset change pickers when build window changes, so OTO/mass can never carry stale weeks.
     scope_key = f"{start_date.isoformat()}|{week_count}|{'|'.join(selected_mondays)}"
     if st.session_state.get("_build_scope_key") != scope_key:
-        for k in ("build_oto_slot_ids", "build_mass_seed_ids"):
+        for k in ("build_oto_slot_ids", "build_mass_seed_ids", "build_oto_movie_list_keys"):
             st.session_state.pop(k, None)
         st.session_state["_build_scope_key"] = scope_key
 
@@ -1829,6 +1871,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     oto_manual_pool: list[dict[str, Any]] = []
     oto_manual_start_idx: Optional[int] = None
     oto_manual_advance = True
+    oto_movie_list_keys: list[str] = []
     if use_oto:
         if not slot_ids:
             st.warning("No editable schedule blocks found in the selected weeks.")
@@ -1871,6 +1914,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 "Auto-populate matching genre show",
                 "Auto-populate matching genre movie/program",
                 "Manual: show > season > episode",
+                "Replace time window with movie list",
             ]
             oto_fill_mode = st.radio(
                 "OTO fill mode",
@@ -1940,6 +1984,26 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                     oto_episode_rows = _episode_rows_for_archive_pick(cfg, oto_pick, nikki)
                 else:
                     st.warning("No related series candidates were found for auto-populate.")
+            elif oto_fill_mode == "Replace time window with movie list":
+                literal_keys = sorted(
+                    [k for k, sd in cfg.shows.items() if sd.kind == "literal"],
+                    key=lambda k: cfg.shows[k].display_name.casefold(),
+                )
+                max_titles = max(0, len(oto_rows))
+                st.caption(
+                    f"Pick up to **{max_titles}** titles (one title can cover one or more selected time blocks)."
+                )
+                if literal_keys:
+                    picked = st.multiselect(
+                        "Movie/program list (ordered by selection)",
+                        literal_keys,
+                        format_func=lambda k: cfg.shows[k].display_name,
+                        key="build_oto_movie_list_keys",
+                    )
+                    # Allow as many titles as selected blocks can support.
+                    oto_movie_list_keys = list(picked[:max_titles])
+                else:
+                    st.warning("No literal movie/program entries found in setup.")
             else:
                 auto_movie_opts = _semantic_candidates(
                     cfg,
@@ -2100,7 +2164,10 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     )
     if use_oto:
         oto_dur = _format_duration_minutes(sum(int(r["duration_minutes"]) for r in oto_rows)) if oto_rows else "0m"
-        oto_name = _display_name_for_archive_pick(cfg, oto_pick) if oto_pick else "—"
+        if oto_fill_mode == "Replace time window with movie list":
+            oto_name = ", ".join(_display_name_for_archive_pick(cfg, k) for k in oto_movie_list_keys) if oto_movie_list_keys else "—"
+        else:
+            oto_name = _display_name_for_archive_pick(cfg, oto_pick) if oto_pick else "—"
         st.markdown(
             f"- OTO: **{len(oto_rows)}** block(s), duration **{oto_dur}**, replacement **{oto_name}**, mode **{oto_fill_mode}**"
         )
@@ -2116,13 +2183,22 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         st.markdown("- Mass: none")
 
     preflight_issues: list[str] = []
-    if use_oto and (not oto_rows or not oto_pick):
-        preflight_issues.append("OTO is enabled but block selection and/or replacement show is missing.")
+    if use_oto and not oto_rows:
+        preflight_issues.append("OTO is enabled but no blocks were selected.")
+    if use_oto and oto_fill_mode != "Replace time window with movie list" and not oto_pick:
+        preflight_issues.append("OTO is enabled but replacement show is missing.")
     if use_oto and oto_fill_mode == "Manual: show > season > episode":
         if not oto_manual_pool or oto_manual_start_idx is None:
             preflight_issues.append("OTO manual mode requires a season and episode selection.")
     if use_oto and oto_fill_mode == "Auto-populate matching genre show" and not oto_episode_rows:
         preflight_issues.append("OTO auto-related-show requires a series with parsed episode rows.")
+    if use_oto and oto_fill_mode == "Replace time window with movie list":
+        if not oto_rows:
+            preflight_issues.append("OTO movie-list mode requires selected time blocks.")
+        if not oto_movie_list_keys:
+            preflight_issues.append("OTO movie-list mode requires at least one movie/program title.")
+        if len(oto_movie_list_keys) > len(oto_rows):
+            preflight_issues.append("OTO movie-list mode supports at most one title per selected block.")
     if use_mass and (not mass_rows or not mass_pick):
         preflight_issues.append("Mass is enabled but block selection and/or replacement show is missing.")
     if use_mass and not st.session_state.get("build_mass_confirm"):
@@ -2149,20 +2225,41 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         can_run = True
         oto_overrides: list[BingeRowOverride] = []
         oto_display = ""
+        oto_grid_displays: list[str] = []
         if use_oto:
             if not oto_rows:
                 st.error("OTO changes are enabled, but no schedule blocks are selected.")
                 can_run = False
-            elif not oto_pick:
+            elif oto_fill_mode != "Replace time window with movie list" and not oto_pick:
                 st.error("OTO changes are enabled, but no replacement show was selected.")
                 can_run = False
             else:
-                oto_display = _display_name_for_archive_pick(cfg, oto_pick)
                 ordered_oto_rows = sorted(oto_rows, key=lambda r: (r["date_iso"], int(r["start_slot"])))
+                if oto_fill_mode == "Replace time window with movie list":
+                    if not oto_movie_list_keys:
+                        st.error("OTO movie-list mode requires one or more movie/program titles.")
+                        can_run = False
+                    elif len(oto_movie_list_keys) > len(ordered_oto_rows):
+                        st.error("OTO movie-list mode supports at most one title per selected block.")
+                        can_run = False
+                    else:
+                        per_title = len(ordered_oto_rows) // len(oto_movie_list_keys)
+                        remainder = len(ordered_oto_rows) % len(oto_movie_list_keys)
+                        for i, show_key in enumerate(oto_movie_list_keys):
+                            repeat = per_title + (1 if i < remainder else 0)
+                            oto_grid_displays.extend(
+                                [_display_name_for_archive_pick(cfg, show_key)] * repeat
+                            )
+                else:
+                    oto_display = _display_name_for_archive_pick(cfg, oto_pick)
+                    oto_grid_displays = [oto_display] * len(ordered_oto_rows)
                 # Build one replacement payload per selected slot using manual or auto fill mode.
-                episode_plan: list[tuple[str, str, str]] = []
+                episode_plan: list[tuple[str, str, str, str]] = []
                 if oto_fill_mode == "Auto-populate matching genre movie/program":
-                    episode_plan = [("MOVIE", "MOVIE", oto_display)] * len(ordered_oto_rows)
+                    episode_plan = [("MOVIE", "MOVIE", oto_display, oto_display)] * len(ordered_oto_rows)
+                elif oto_fill_mode == "Replace time window with movie list":
+                    for title in oto_grid_displays:
+                        episode_plan.append(("MOVIE", "MOVIE", title, title))
                 else:
                     pool = list(oto_episode_rows)
                     if oto_fill_mode == "Manual: show > season > episode":
@@ -2182,6 +2279,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                                             str(ep.get("code") or ""),
                                             _episode_num_text(ep),
                                             str(ep.get("title") or ""),
+                                            oto_display,
                                         )
                                     )
                             else:
@@ -2191,6 +2289,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                                         str(ep.get("code") or ""),
                                         _episode_num_text(ep),
                                         str(ep.get("title") or ""),
+                                        oto_display,
                                     )
                                 ] * len(ordered_oto_rows)
                         else:
@@ -2208,19 +2307,22 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                                         str(ep.get("code") or ""),
                                         _episode_num_text(ep),
                                         str(ep.get("title") or ""),
+                                        oto_display,
                                     )
                                 )
 
                 for i, row in enumerate(ordered_oto_rows):
                     st_norm = parse_flexible_time(str(row["start"]))
                     fin_norm = parse_flexible_time(str(row["finish"]))
-                    ep_code, ep_num, ep_title = episode_plan[i] if i < len(episode_plan) else ("", "", "")
+                    ep_code, ep_num, ep_title, row_show = (
+                        episode_plan[i] if i < len(episode_plan) else ("", "", "", oto_display)
+                    )
                     if not ep_code and oto_fill_mode != "Auto-populate matching genre movie/program":
                         ep_code = oto_display
                     if not ep_num and oto_fill_mode != "Auto-populate matching genre movie/program":
                         ep_num = ep_code
                     if not ep_title:
-                        ep_title = oto_display
+                        ep_title = row_show or oto_display
                     oto_overrides.append(
                         BingeRowOverride(
                             match_date=row["date"],
@@ -2229,7 +2331,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                             new_start=st_norm,
                             new_finish=fin_norm,
                             new_episode=ep_code,
-                            new_show=oto_display,
+                            new_show=row_show or oto_display,
                             new_episode_num=ep_num,
                             new_episode_name=ep_title,
                         )
@@ -2326,9 +2428,13 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 st.error(str(e))
                 st.exception(e)
             else:
-                if oto_rows and oto_display:
-                    for msg in _apply_output_grid_slot_replacements(grids_path, oto_rows, oto_display):
-                        st.info(msg)
+                if oto_rows and oto_grid_displays:
+                    if len(set(oto_grid_displays)) == 1:
+                        for msg in _apply_output_grid_slot_replacements(grids_path, oto_rows, oto_grid_displays[0]):
+                            st.info(msg)
+                    else:
+                        for msg in _apply_output_grid_slot_replacements_multi(grids_path, sorted(oto_rows, key=lambda r: (r["date_iso"], int(r["start_slot"]))), oto_grid_displays):
+                            st.info(msg)
                 st.session_state["binge_path"] = binge_path
                 st.session_state["grids_path"] = grids_path
                 st.session_state["out_dir"] = out_dir
