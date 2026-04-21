@@ -2032,8 +2032,14 @@ def _render_binge_grids_preview(
             if cfg is not None and cfg_path is not None and nikki_path is not None:
                 st.markdown("###### Block swap")
                 if picked_row_indices:
+                    selected_rows = sorted(set(int(i) for i in picked_row_indices))
+                    row_meta: list[dict[str, Any]] = []
+                    for idx in selected_rows:
+                        sv = binge_df.iloc[idx][show_col]
+                        show_val = str(sv).strip() if pd.notna(sv) else ""
+                        row_meta.append({"idx": idx, "show": show_val})
                     st.caption(
-                        f"Assign replacements for **{len(picked_row_indices)}** selected row(s), then apply all at once."
+                        f"Assign replacements for **{len(selected_rows)}** selected row(s), then apply all at once."
                     )
                     yaml_keys = sorted(cfg.shows.keys(), key=lambda k: cfg.shows[k].display_name.lower())
                     extra_tab_names: list[str] = []
@@ -2041,6 +2047,47 @@ def _render_binge_grids_preview(
                         tabs = _nikki_workbook_sheet_names(str(nikki_path.resolve()), _nikki_mtime(nikki_path))
                         extra_tab_names = workbook_tabs_not_in_yaml(cfg, tabs)
                     option_keys = yaml_keys + [workbook_tab_option(t) for t in extra_tab_names]
+                    source_keys = {
+                        k
+                        for k in (_slot_source_show_key(cfg, str(m.get("show", ""))) for m in row_meta)
+                        if k is not None
+                    }
+                    source_groups = [g for g in (_semantic_group_for_show(cfg, k) for k in source_keys) if g]
+                    source_group = sorted(source_groups)[0] if source_groups else ""
+                    mode = st.radio(
+                        "Swap mode",
+                        ("Quick manual", "Advanced (Create Schedule logic)"),
+                        horizontal=True,
+                        key=f"{key_prefix}_block_swap_mode",
+                    )
+                    adv_fill_choice = "manual_replace"
+                    adv_manual_kind = "show"
+                    if mode == "Advanced (Create Schedule logic)":
+                        if source_group:
+                            st.caption(f"Semantic source group: `{source_group}`")
+                        adv_fill_choice = st.radio(
+                            "Replacement style",
+                            (
+                                "auto_show",
+                                "auto_movie",
+                                "manual_replace",
+                            ),
+                            format_func=lambda v: {
+                                "auto_show": "Auto-swap with shows",
+                                "auto_movie": "Auto-swap with movies",
+                                "manual_replace": "Manual replace",
+                            }[str(v)],
+                            horizontal=True,
+                            key=f"{key_prefix}_block_adv_fill_choice",
+                        )
+                        if adv_fill_choice == "manual_replace":
+                            adv_manual_kind = st.radio(
+                                "Manual replace type",
+                                ("show", "movie"),
+                                format_func=lambda v: "Show" if v == "show" else "Movie/program",
+                                horizontal=True,
+                                key=f"{key_prefix}_block_adv_manual_kind",
+                            )
 
                     def _opt_label(opt: str) -> str:
                         tab = parse_workbook_tab_option(opt)
@@ -2048,14 +2095,51 @@ def _render_binge_grids_preview(
                             return f"{tab} _(not on schedule)_"
                         return cfg.shows[opt].display_name
 
-                    for idx in sorted(picked_row_indices):
-                        row = binge_df.iloc[idx]
-                        sv = row[show_col]
-                        show_val = str(sv).strip() if pd.notna(sv) else ""
+                    adv_movie_opts = _movie_program_picker_options(cfg, extra_tab_names, [], nikki_path)
+                    adv_auto_show_opts = _semantic_candidates(
+                        cfg,
+                        group=source_group if mode == "Advanced (Create Schedule logic)" else "",
+                        kind="series",
+                        exclude_keys=source_keys,
+                    )
+                    if not adv_auto_show_opts:
+                        adv_auto_show_opts = _semantic_candidates(cfg, group="", kind="series", exclude_keys=source_keys)
+                    adv_auto_movie_opts = _auto_movie_candidates(
+                        cfg,
+                        cfg_path,
+                        extra_tab_names,
+                        [],
+                        nikki_path,
+                        source_group,
+                    )
+
+                    for r_idx, meta in enumerate(row_meta):
+                        idx = int(meta["idx"])
+                        show_val = str(meta["show"])
+                        select_opts = option_keys
+                        select_fmt = _opt_label
+                        if mode == "Advanced (Create Schedule logic)":
+                            if adv_fill_choice == "auto_show":
+                                select_opts = adv_auto_show_opts or option_keys
+                                select_fmt = lambda opt: cfg.shows.get(opt, ShowDef(key="literal", display_name=str(opt), kind="literal")).display_name if opt in cfg.shows else _display_name_for_archive_pick(cfg, str(opt))
+                            elif adv_fill_choice == "auto_movie":
+                                select_opts = adv_auto_movie_opts or adv_movie_opts or option_keys
+                                select_fmt = lambda opt: _display_name_for_archive_pick(cfg, str(opt))
+                            elif adv_manual_kind == "movie":
+                                select_opts = adv_movie_opts or option_keys
+                                select_fmt = lambda opt: _display_name_for_archive_pick(cfg, str(opt))
+                            else:
+                                select_opts = option_keys
+                                select_fmt = _opt_label
+                        if not select_opts:
+                            st.warning("No replacement options available for the selected mode.")
+                            continue
+                        default_idx = r_idx % len(select_opts) if mode == "Advanced (Create Schedule logic)" else 0
                         st.selectbox(
                             f"Row {idx + 1}: {show_val or '—'}",
-                            option_keys,
-                            format_func=_opt_label,
+                            select_opts,
+                            index=default_idx,
+                            format_func=select_fmt,
                             key=f"{key_prefix}_block_pick_{idx}",
                         )
 
@@ -2068,7 +2152,7 @@ def _render_binge_grids_preview(
                         applied = 0
                         all_msgs: list[str] = []
                         first_anchor: Optional[dict[str, Any]] = None
-                        for idx in sorted(picked_row_indices):
+                        for idx in selected_rows:
                             pick = st.session_state.get(f"{key_prefix}_block_pick_{idx}")
                             if not pick:
                                 all_msgs.append(f"Row {idx + 1}: no replacement selected.")
