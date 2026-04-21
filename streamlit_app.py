@@ -1292,9 +1292,9 @@ def _load_imported_catalog_rows(cfg_path: Path) -> list[dict[str, Any]]:
     if isinstance(raw, dict):
         rows = raw.get("rows", [])
         if isinstance(rows, list):
-            return [r for r in rows if isinstance(r, dict)]
+            return _dedupe_import_rows([r for r in rows if isinstance(r, dict)])
     if isinstance(raw, list):
-        return [r for r in raw if isinstance(r, dict)]
+        return _dedupe_import_rows([r for r in raw if isinstance(r, dict)])
     return []
 
 
@@ -1306,7 +1306,51 @@ def _save_imported_catalog_rows(cfg_path: Path, rows: list[dict[str, Any]]) -> N
 
 
 def _normalize_key(text: Any) -> str:
-    return " ".join(str(text or "").strip().lower().split())
+    v = " ".join(str(text or "").strip().lower().split())
+    if v in {"nan", "none", "null", "nat"}:
+        return ""
+    return v
+
+
+def _normalize_episode_number(value: Any) -> str:
+    raw = _normalize_key(value)
+    if not raw:
+        return ""
+    if re.fullmatch(r"\d+", raw):
+        try:
+            return str(int(raw))
+        except Exception:
+            return raw
+    return raw
+
+
+def _import_row_identity_key(r: dict[str, Any]) -> str:
+    kind = _normalize_key(r.get("content_type", ""))
+    series_title = _normalize_key(r.get("series_title", ""))
+    display_name = _normalize_key(r.get("display_name", ""))
+    ep_num = _normalize_episode_number(r.get("episode_number", ""))
+    ep_title = _normalize_key(r.get("episode_title", ""))
+    if kind == "series":
+        base = series_title or display_name
+        episode_token = ep_num or ep_title
+        return f"{kind}|{base}|{episode_token}"
+    return f"{kind or 'movie'}|{display_name or series_title}"
+
+
+def _dedupe_import_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Keep latest row for each identity key so corrected re-imports replace older rows.
+    out: list[dict[str, Any]] = []
+    seen_idx: dict[str, int] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = _import_row_identity_key(row)
+        if key in seen_idx:
+            out[seen_idx[key]] = row
+        else:
+            seen_idx[key] = len(out)
+            out.append(row)
+    return out
 
 
 def _import_aliases() -> dict[str, set[str]]:
@@ -1515,35 +1559,19 @@ def _parse_uploaded_content_file(name: str, payload: bytes) -> tuple[list[dict[s
 
 
 def _merge_import_rows(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    out = list(existing)
+    out = _dedupe_import_rows(list(existing))
     seen_idx: dict[str, int] = {}
-    for i, r in enumerate(existing):
-        key = "|".join(
-            [
-                _normalize_key(r.get("content_type", "")),
-                _normalize_key(r.get("display_name", "")),
-                _normalize_key(r.get("series_title", "")),
-                _normalize_key(r.get("episode_number", "")),
-                _normalize_key(r.get("episode_title", "")),
-            ]
-        )
+    for i, r in enumerate(out):
+        key = _import_row_identity_key(r)
         seen_idx[key] = i
     for r in incoming:
-        key = "|".join(
-            [
-                _normalize_key(r.get("content_type", "")),
-                _normalize_key(r.get("display_name", "")),
-                _normalize_key(r.get("series_title", "")),
-                _normalize_key(r.get("episode_number", "")),
-                _normalize_key(r.get("episode_title", "")),
-            ]
-        )
+        key = _import_row_identity_key(r)
         if key in seen_idx:
             out[seen_idx[key]] = r
         else:
             seen_idx[key] = len(out)
             out.append(r)
-    return out
+    return _dedupe_import_rows(out)
 
 
 def _looks_like_movie_program_name(name: str) -> bool:
