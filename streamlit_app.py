@@ -1399,6 +1399,12 @@ def _normalize_import_dataframe(df_raw: pd.DataFrame, sheet_name: str) -> pd.Dat
 def _runtime_minutes_from_cell(v: Any) -> Optional[int]:
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return None
+    if isinstance(v, (int, float)) and not pd.isna(v):
+        fv = float(v)
+        # Excel duration cells can come through as day fractions.
+        if 0 < fv < 1:
+            return max(1, int(round(fv * 24 * 60)))
+        return max(1, int(round(fv)))
     if hasattr(v, "total_seconds"):
         try:
             return max(1, int(round(float(v.total_seconds()) / 60.0)))
@@ -1416,7 +1422,13 @@ def _runtime_minutes_from_cell(v: Any) -> Optional[int]:
         if len(nums) == 3:
             return max(1, int(round(nums[0] * 60 + nums[1] + nums[2] / 60)))
         if len(nums) == 2:
-            return max(1, int(round(nums[0] * 60 + nums[1])))
+            a, b = nums
+            # Heuristic:
+            # - 10:00+ is almost always mm:ss in metadata forms.
+            # - 0:00..5:59 is often hh:mm for long-form content.
+            if a >= 10:
+                return max(1, int(round(a + b / 60)))
+            return max(1, int(round(a * 60 + b)))
     try:
         return max(1, int(round(float(s))))
     except Exception:
@@ -1424,6 +1436,17 @@ def _runtime_minutes_from_cell(v: Any) -> Optional[int]:
 
 
 def _import_rows_from_dataframe(df: pd.DataFrame, sheet_name: str, source_name: str) -> list[dict[str, Any]]:
+    def _clean_text(v: Any) -> str:
+        if v is None:
+            return ""
+        try:
+            if pd.isna(v):
+                return ""
+        except Exception:
+            pass
+        t = str(v).strip()
+        return "" if t.lower() == "nan" else t
+
     aliases = _import_aliases()
     col_map: dict[str, str] = {}
     for c in df.columns:
@@ -1433,9 +1456,9 @@ def _import_rows_from_dataframe(df: pd.DataFrame, sheet_name: str, source_name: 
                 col_map[canon] = str(c)
     out: list[dict[str, Any]] = []
     for _, r in df.iterrows():
-        series_title = str(r.get(col_map.get("series_title", ""), "")).strip()
-        title = str(r.get(col_map.get("title", ""), "")).strip()
-        ep_num = str(r.get(col_map.get("episode_number", ""), "")).strip()
+        series_title = _clean_text(r.get(col_map.get("series_title", ""), ""))
+        title = _clean_text(r.get(col_map.get("title", ""), ""))
+        ep_num = _clean_text(r.get(col_map.get("episode_number", ""), ""))
         if not series_title and ep_num:
             series_title = sheet_name.strip()
         is_series = bool(series_title and (ep_num or title))
@@ -1456,13 +1479,13 @@ def _import_rows_from_dataframe(df: pd.DataFrame, sheet_name: str, source_name: 
             "series_title": series_title,
             "episode_number": ep_num,
             "episode_title": title if is_series else "",
-            "genre": str(r.get(col_map.get("genre", ""), "")).split(",")[0].strip().lower(),
+            "genre": _clean_text(r.get(col_map.get("genre", ""), "")).split(",")[0].strip().lower(),
             "runtime_minutes": int(rt) if rt is not None else None,
             "original_airdate": air_iso,
-            "production_company": str(r.get(col_map.get("production_company", ""), "")).strip(),
-            "copyright": str(r.get(col_map.get("copyright", ""), "")).strip(),
-            "synopsis_short": str(r.get(col_map.get("synopsis_short", ""), "")).strip(),
-            "synopsis_long": str(r.get(col_map.get("synopsis_long", ""), "")).strip(),
+            "production_company": _clean_text(r.get(col_map.get("production_company", ""), "")),
+            "copyright": _clean_text(r.get(col_map.get("copyright", ""), "")),
+            "synopsis_short": _clean_text(r.get(col_map.get("synopsis_short", ""), "")),
+            "synopsis_long": _clean_text(r.get(col_map.get("synopsis_long", ""), "")),
             "source_sheet": sheet_name,
             "source_file": source_name,
         }
@@ -1493,8 +1516,8 @@ def _parse_uploaded_content_file(name: str, payload: bytes) -> tuple[list[dict[s
 
 def _merge_import_rows(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out = list(existing)
-    seen: set[str] = set()
-    for r in existing:
+    seen_idx: dict[str, int] = {}
+    for i, r in enumerate(existing):
         key = "|".join(
             [
                 _normalize_key(r.get("content_type", "")),
@@ -1504,7 +1527,7 @@ def _merge_import_rows(existing: list[dict[str, Any]], incoming: list[dict[str, 
                 _normalize_key(r.get("episode_title", "")),
             ]
         )
-        seen.add(key)
+        seen_idx[key] = i
     for r in incoming:
         key = "|".join(
             [
@@ -1515,10 +1538,11 @@ def _merge_import_rows(existing: list[dict[str, Any]], incoming: list[dict[str, 
                 _normalize_key(r.get("episode_title", "")),
             ]
         )
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(r)
+        if key in seen_idx:
+            out[seen_idx[key]] = r
+        else:
+            seen_idx[key] = len(out)
+            out.append(r)
     return out
 
 
