@@ -2131,42 +2131,34 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
             f"Current label: **{', '.join(olds)}**{ctx_suffix}."
         )
 
-    st.markdown("##### Add new content")
-    st.caption("Import metadata files (.xlsx/.csv). The app normalizes column names and appends to the local content catalog.")
-    uploaded = st.file_uploader(
-        "Upload content metadata file",
-        type=["xlsx", "csv"],
-        key="archive_import_upload",
-    )
-    if uploaded is not None:
-        try:
-            payload = uploaded.getvalue()
-            imp_rows, imp_notes = _parse_uploaded_content_file(uploaded.name, payload)
-            st.caption("Import parse summary: " + " | ".join(imp_notes[:8]))
-            st.caption(f"Parsed **{len(imp_rows)}** content row(s) from `{uploaded.name}`.")
-            if imp_rows:
-                preview_df = pd.DataFrame(imp_rows)[
-                    [
-                        "content_type",
-                        "display_name",
-                        "series_title",
-                        "episode_number",
-                        "episode_title",
-                        "genre",
-                        "runtime_minutes",
-                        "original_airdate",
-                        "production_company",
-                    ]
-                ]
-                st.dataframe(preview_df.head(20), use_container_width=True, hide_index=True)
-                if st.button("Save imported content", key="archive_import_save", type="primary"):
+    if "archive_show_upload_picker" not in st.session_state:
+        st.session_state["archive_show_upload_picker"] = False
+    if st.button("Upload new content", key="archive_upload_new_content_btn", type="primary"):
+        st.session_state["archive_show_upload_picker"] = not bool(
+            st.session_state.get("archive_show_upload_picker", False)
+        )
+    if st.session_state.get("archive_show_upload_picker"):
+        uploaded = st.file_uploader(
+            "Upload content metadata file",
+            type=["xlsx", "csv"],
+            key="archive_import_upload_compact",
+            label_visibility="collapsed",
+        )
+        if uploaded is not None:
+            try:
+                payload = uploaded.getvalue()
+                sig = f"{uploaded.name}:{hashlib.sha1(payload).hexdigest()}"
+                if st.session_state.get("archive_import_last_sig") != sig:
+                    imp_rows, _imp_notes = _parse_uploaded_content_file(uploaded.name, payload)
                     existing = _load_imported_catalog_rows(cfg_path)
                     merged = _merge_import_rows(existing, imp_rows)
                     _save_imported_catalog_rows(cfg_path, merged)
-                    st.success(f"Saved {len(merged) - len(existing)} new row(s) to imported content catalog.")
+                    st.session_state["archive_import_last_sig"] = sig
+                    st.session_state["archive_show_upload_picker"] = False
+                    st.toast(f"Imported {len(merged) - len(existing)} new row(s).")
                     st.rerun()
-        except Exception as e:
-            st.error(f"Import failed: {e}")
+            except Exception as e:
+                st.error(f"Import failed: {e}")
 
     yaml_keys = sorted(cfg.shows.keys(), key=lambda k: cfg.shows[k].display_name.lower())
     extra_tab_names: list[str] = []
