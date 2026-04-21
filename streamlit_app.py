@@ -2114,6 +2114,17 @@ def _render_binge_grids_preview(
 
 
 def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
+    title_col, action_col = st.columns([8, 2])
+    with title_col:
+        st.markdown(f"## {_NAV_ARCHIVE}")
+    with action_col:
+        if "archive_show_upload_picker" not in st.session_state:
+            st.session_state["archive_show_upload_picker"] = False
+        if st.button("Upload new content", key="archive_upload_new_content_btn", type="primary"):
+            st.session_state["archive_show_upload_picker"] = not bool(
+                st.session_state.get("archive_show_upload_picker", False)
+            )
+
     swap_ctx = st.session_state.get("swap_context")
     if swap_ctx:
         olds = swap_ctx.get("old_show_labels") or []
@@ -2131,12 +2142,6 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
             f"Current label: **{', '.join(olds)}**{ctx_suffix}."
         )
 
-    if "archive_show_upload_picker" not in st.session_state:
-        st.session_state["archive_show_upload_picker"] = False
-    if st.button("Upload new content", key="archive_upload_new_content_btn", type="primary"):
-        st.session_state["archive_show_upload_picker"] = not bool(
-            st.session_state.get("archive_show_upload_picker", False)
-        )
     if st.session_state.get("archive_show_upload_picker"):
         uploaded = st.file_uploader(
             "Upload content metadata file",
@@ -3919,7 +3924,6 @@ def main() -> None:
     nikki_path = resolved_nikki_workbook_path(cfg)
 
     if page == _NAV_ARCHIVE:
-        st.header(_NAV_ARCHIVE)
         _render_content_archive(cfg, cfg_path, nikki_path)
     elif page == _NAV_EDIT_SCHEDULE:
         st.header(_NAV_EDIT_SCHEDULE)
