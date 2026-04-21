@@ -8,6 +8,7 @@ Run from the project directory:
 from __future__ import annotations
 
 import hashlib
+import io
 import inspect
 import json
 import os
@@ -53,6 +54,7 @@ from binge_schedule.workbook_discover import (
 )
 
 _RAW_LITERAL_PREFIX = "__literal_text__:"
+_IMPORTED_CONTENT_PREFIX = "__imported_content__:"
 
 
 def _default_config_display() -> str:
@@ -1222,6 +1224,9 @@ def _binge_row_swap_summary(df: pd.DataFrame, idx: int) -> str:
 
 
 def _display_name_for_archive_pick(cfg, sel: str) -> str:
+    imported = _parse_imported_content_option(sel)
+    if imported is not None:
+        return imported
     raw_literal = _parse_literal_text_option(sel)
     if raw_literal is not None:
         return raw_literal
@@ -1232,6 +1237,9 @@ def _display_name_for_archive_pick(cfg, sel: str) -> str:
 
 
 def _showdef_for_archive_pick(cfg, sel: str) -> Optional[ShowDef]:
+    imported = _parse_imported_content_option(sel)
+    if imported is not None:
+        return ShowDef(key="literal", display_name=imported, kind="literal")
     raw_literal = _parse_literal_text_option(sel)
     if raw_literal is not None:
         return ShowDef(key="literal", display_name=raw_literal, kind="literal")
@@ -1252,6 +1260,266 @@ def _parse_literal_text_option(opt: str) -> Optional[str]:
         raw = opt[len(_RAW_LITERAL_PREFIX) :].strip()
         return raw or None
     return None
+
+
+def _imported_content_option(text: str) -> str:
+    return f"{_IMPORTED_CONTENT_PREFIX}{str(text).strip()}"
+
+
+def _parse_imported_content_option(opt: str) -> Optional[str]:
+    if not isinstance(opt, str):
+        return None
+    if opt.startswith(_IMPORTED_CONTENT_PREFIX):
+        raw = opt[len(_IMPORTED_CONTENT_PREFIX) :].strip()
+        return raw or None
+    return None
+
+
+def _imported_catalog_path(cfg_path: Path) -> Path:
+    cfg_dir = cfg_path.resolve().parent
+    repo_root = cfg_dir.parent if cfg_dir.name.casefold() == "config" else cfg_dir
+    return repo_root / "config" / "imported_content_catalog.json"
+
+
+def _load_imported_catalog_rows(cfg_path: Path) -> list[dict[str, Any]]:
+    p = _imported_catalog_path(cfg_path)
+    if not p.is_file():
+        return []
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if isinstance(raw, dict):
+        rows = raw.get("rows", [])
+        if isinstance(rows, list):
+            return [r for r in rows if isinstance(r, dict)]
+    if isinstance(raw, list):
+        return [r for r in raw if isinstance(r, dict)]
+    return []
+
+
+def _save_imported_catalog_rows(cfg_path: Path, rows: list[dict[str, Any]]) -> None:
+    p = _imported_catalog_path(cfg_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"rows": rows}
+    p.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _normalize_key(text: Any) -> str:
+    return " ".join(str(text or "").strip().lower().split())
+
+
+def _import_aliases() -> dict[str, set[str]]:
+    return {
+        "series_title": {
+            "series title",
+            "series",
+            "artist/series",
+            "show",
+            "program",
+        },
+        "title": {
+            "title",
+            "episode",
+            "episode title",
+            "title (internal)",
+            "sort title",
+        },
+        "episode_number": {
+            "episode number",
+            "season/episode",
+            "season_episode",
+            "ep #",
+            "episode #",
+        },
+        "synopsis_short": {
+            "episode short synopsis",
+            "short description",
+            "series short synopsis (150 characters)",
+            "synopsis short",
+        },
+        "synopsis_long": {
+            "episode long synopsis",
+            "description",
+            "synopsis",
+            "series long synopsis (250 characters)",
+            "synopsis long",
+        },
+        "original_airdate": {
+            "original airdate",
+            "year/original airdate",
+            "air date",
+            "production year",
+            "year",
+        },
+        "runtime": {
+            "runtime",
+            "trt",
+            "rt",
+            "duration",
+        },
+        "production_company": {
+            "production company",
+            "studios",
+            "studio",
+            "producer(s)",
+        },
+        "genre": {
+            "genre",
+            "amazon channels genre",
+            "roku genre tags",
+        },
+        "copyright": {
+            "copyright",
+        },
+    }
+
+
+def _normalize_import_dataframe(df_raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+    aliases = _import_aliases()
+    alias_flat = {a for vals in aliases.values() for a in vals}
+    best_row = 0
+    best_score = -1
+    for hdr in (0, 1, 2):
+        if hdr >= len(df_raw):
+            continue
+        vals = [_normalize_key(v) for v in list(df_raw.iloc[hdr].values)]
+        score = sum(1 for v in vals if v in alias_flat)
+        if score > best_score:
+            best_score = score
+            best_row = hdr
+    header_vals = [str(v).strip() if pd.notna(v) else "" for v in list(df_raw.iloc[best_row].values)]
+    header_vals = [h if h else f"col_{i}" for i, h in enumerate(header_vals)]
+    data = df_raw.iloc[best_row + 1 :].copy()
+    data.columns = header_vals
+    data = data.dropna(how="all")
+    return data
+
+
+def _runtime_minutes_from_cell(v: Any) -> Optional[int]:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return None
+    if hasattr(v, "total_seconds"):
+        try:
+            return max(1, int(round(float(v.total_seconds()) / 60.0)))
+        except Exception:
+            return None
+    s = str(v).strip()
+    if not s:
+        return None
+    if ":" in s:
+        parts = s.split(":")
+        try:
+            nums = [int(float(x)) for x in parts]
+        except Exception:
+            return None
+        if len(nums) == 3:
+            return max(1, int(round(nums[0] * 60 + nums[1] + nums[2] / 60)))
+        if len(nums) == 2:
+            return max(1, int(round(nums[0] * 60 + nums[1])))
+    try:
+        return max(1, int(round(float(s))))
+    except Exception:
+        return None
+
+
+def _import_rows_from_dataframe(df: pd.DataFrame, sheet_name: str, source_name: str) -> list[dict[str, Any]]:
+    aliases = _import_aliases()
+    col_map: dict[str, str] = {}
+    for c in df.columns:
+        nk = _normalize_key(c)
+        for canon, vals in aliases.items():
+            if nk in vals and canon not in col_map:
+                col_map[canon] = str(c)
+    out: list[dict[str, Any]] = []
+    for _, r in df.iterrows():
+        series_title = str(r.get(col_map.get("series_title", ""), "")).strip()
+        title = str(r.get(col_map.get("title", ""), "")).strip()
+        ep_num = str(r.get(col_map.get("episode_number", ""), "")).strip()
+        if not series_title and ep_num:
+            series_title = sheet_name.strip()
+        is_series = bool(series_title and (ep_num or title))
+        display = title if not is_series else (series_title or title)
+        if not display:
+            continue
+        rt = _runtime_minutes_from_cell(r.get(col_map.get("runtime", ""), None))
+        air_raw = r.get(col_map.get("original_airdate", ""), None)
+        air_iso = ""
+        try:
+            if pd.notna(air_raw):
+                air_iso = pd.to_datetime(air_raw).date().isoformat()
+        except Exception:
+            air_iso = str(air_raw or "").strip()
+        row = {
+            "content_type": "series" if is_series else "movie",
+            "display_name": display,
+            "series_title": series_title,
+            "episode_number": ep_num,
+            "episode_title": title if is_series else "",
+            "genre": str(r.get(col_map.get("genre", ""), "")).split(",")[0].strip().lower(),
+            "runtime_minutes": int(rt) if rt is not None else None,
+            "original_airdate": air_iso,
+            "production_company": str(r.get(col_map.get("production_company", ""), "")).strip(),
+            "copyright": str(r.get(col_map.get("copyright", ""), "")).strip(),
+            "synopsis_short": str(r.get(col_map.get("synopsis_short", ""), "")).strip(),
+            "synopsis_long": str(r.get(col_map.get("synopsis_long", ""), "")).strip(),
+            "source_sheet": sheet_name,
+            "source_file": source_name,
+        }
+        out.append(row)
+    return out
+
+
+def _parse_uploaded_content_file(name: str, payload: bytes) -> tuple[list[dict[str, Any]], list[str]]:
+    rows: list[dict[str, Any]] = []
+    notes: list[str] = []
+    lname = str(name or "").lower()
+    if lname.endswith(".csv"):
+        df = pd.read_csv(io.BytesIO(payload))
+        rows.extend(_import_rows_from_dataframe(df, "CSV", name))
+        return rows, notes
+    xls = pd.ExcelFile(io.BytesIO(payload))
+    for sn in xls.sheet_names:
+        try:
+            raw = pd.read_excel(io.BytesIO(payload), sheet_name=sn, header=None)
+            norm = _normalize_import_dataframe(raw, sn)
+            got = _import_rows_from_dataframe(norm, sn, name)
+            rows.extend(got)
+            notes.append(f"{sn}: {len(got)} row(s) parsed")
+        except Exception as e:
+            notes.append(f"{sn}: skipped ({e})")
+    return rows, notes
+
+
+def _merge_import_rows(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = list(existing)
+    seen: set[str] = set()
+    for r in existing:
+        key = "|".join(
+            [
+                _normalize_key(r.get("content_type", "")),
+                _normalize_key(r.get("display_name", "")),
+                _normalize_key(r.get("series_title", "")),
+                _normalize_key(r.get("episode_number", "")),
+                _normalize_key(r.get("episode_title", "")),
+            ]
+        )
+        seen.add(key)
+    for r in incoming:
+        key = "|".join(
+            [
+                _normalize_key(r.get("content_type", "")),
+                _normalize_key(r.get("display_name", "")),
+                _normalize_key(r.get("series_title", "")),
+                _normalize_key(r.get("episode_number", "")),
+                _normalize_key(r.get("episode_title", "")),
+            ]
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
 
 
 def _looks_like_movie_program_name(name: str) -> bool:
@@ -1350,11 +1618,56 @@ def _movie_semantic_groups(cfg_path_str: str) -> dict[str, str]:
     return out
 
 
+@st.cache_data(show_spinner=False)
+def _nikki_movie_semantic_groups(nikki_path_str: str, _workbook_mtime: float) -> dict[str, str]:
+    """Infer movie semantic groups from Nikki movies tab Genre column."""
+    p = Path(nikki_path_str)
+    if not p.is_file():
+        return {}
+    try:
+        df = pd.read_excel(p, sheet_name="movies", header=1)
+    except Exception:
+        return {}
+    out: dict[str, str] = {}
+    for _, r in df.iterrows():
+        title = str(r.get("Title") or "").strip()
+        if not title:
+            continue
+        genre_raw = str(r.get("Genre") or "").strip()
+        if not genre_raw:
+            continue
+        # Use primary genre to keep filter options manageable.
+        primary = genre_raw.split(",")[0].split("/")[0].strip().lower()
+        if not primary:
+            continue
+        year_val = r.get("Year")
+        year_num: Optional[int] = None
+        try:
+            if pd.notna(year_val):
+                year_num = int(float(year_val))
+        except Exception:
+            year_num = None
+        keys = [title]
+        if year_num is not None:
+            keys.append(f"{title} ({year_num})")
+        for key in keys:
+            for kk in _title_key_variants(key):
+                out[kk] = primary
+    return out
+
+
 def _semantic_group_for_archive_option(
     cfg,
     opt: str,
     movie_groups: dict[str, str],
 ) -> str:
+    imported = _parse_imported_content_option(opt)
+    if imported is not None:
+        for kk in _title_key_variants(imported):
+            g = movie_groups.get(kk)
+            if g:
+                return g
+        return ""
     if opt in cfg.shows:
         return str(getattr(cfg.shows[opt], "semantic_group", None) or "").strip().lower()
     raw_literal = _parse_literal_text_option(opt)
@@ -1460,7 +1773,8 @@ def _auto_movie_candidates(
     movie_opts = _movie_program_picker_options(cfg, extra_tab_names, template_slots, nikki_path)
     if not movie_opts:
         return []
-    movie_groups = _movie_semantic_groups(str(cfg_path.resolve()))
+    movie_groups = _nikki_movie_semantic_groups(str(nikki_path.resolve()), _nikki_mtime(nikki_path))
+    movie_groups.update(_movie_semantic_groups(str(cfg_path.resolve())))
     candidates: list[str] = []
     if source_group:
         candidates = [
@@ -1817,6 +2131,43 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
             f"Current label: **{', '.join(olds)}**{ctx_suffix}."
         )
 
+    st.markdown("##### Add new content")
+    st.caption("Import metadata files (.xlsx/.csv). The app normalizes column names and appends to the local content catalog.")
+    uploaded = st.file_uploader(
+        "Upload content metadata file",
+        type=["xlsx", "csv"],
+        key="archive_import_upload",
+    )
+    if uploaded is not None:
+        try:
+            payload = uploaded.getvalue()
+            imp_rows, imp_notes = _parse_uploaded_content_file(uploaded.name, payload)
+            st.caption("Import parse summary: " + " | ".join(imp_notes[:8]))
+            st.caption(f"Parsed **{len(imp_rows)}** content row(s) from `{uploaded.name}`.")
+            if imp_rows:
+                preview_df = pd.DataFrame(imp_rows)[
+                    [
+                        "content_type",
+                        "display_name",
+                        "series_title",
+                        "episode_number",
+                        "episode_title",
+                        "genre",
+                        "runtime_minutes",
+                        "original_airdate",
+                        "production_company",
+                    ]
+                ]
+                st.dataframe(preview_df.head(20), use_container_width=True, hide_index=True)
+                if st.button("Save imported content", key="archive_import_save", type="primary"):
+                    existing = _load_imported_catalog_rows(cfg_path)
+                    merged = _merge_import_rows(existing, imp_rows)
+                    _save_imported_catalog_rows(cfg_path, merged)
+                    st.success(f"Saved {len(merged) - len(existing)} new row(s) to imported content catalog.")
+                    st.rerun()
+        except Exception as e:
+            st.error(f"Import failed: {e}")
+
     yaml_keys = sorted(cfg.shows.keys(), key=lambda k: cfg.shows[k].display_name.lower())
     extra_tab_names: list[str] = []
     if nikki_path.is_file():
@@ -1854,8 +2205,37 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
         slot_rows.extend(_slot_rows_from_grids_workbook(gp))
 
     slot_literal_opts = _literal_options_from_slots(cfg, slot_rows)
+    imported_rows = _load_imported_catalog_rows(cfg_path)
+    imported_movie_names = sorted(
+        {
+            str(r.get("display_name") or "").strip()
+            for r in imported_rows
+            if str(r.get("display_name") or "").strip() and str(r.get("content_type") or "").strip().lower() != "series"
+        },
+        key=str.casefold,
+    )
+    imported_series_names = sorted(
+        {
+            str(r.get("series_title") or r.get("display_name") or "").strip()
+            for r in imported_rows
+            if str(r.get("series_title") or r.get("display_name") or "").strip()
+            and str(r.get("content_type") or "").strip().lower() == "series"
+        },
+        key=str.casefold,
+    )
+    imported_opts = [_imported_content_option(x) for x in (imported_series_names + imported_movie_names)]
+    imported_rows_by_name: dict[str, list[dict[str, Any]]] = {}
+    for r in imported_rows:
+        name = (
+            str(r.get("series_title") or r.get("display_name") or "").strip()
+            if str(r.get("content_type") or "").strip().lower() == "series"
+            else str(r.get("display_name") or "").strip()
+        )
+        if not name:
+            continue
+        imported_rows_by_name.setdefault(name, []).append(r)
 
-    all_option_keys = yaml_keys + extra_opts + slot_literal_opts + nikki_movie_opts
+    all_option_keys = yaml_keys + extra_opts + slot_literal_opts + nikki_movie_opts + imported_opts
     archive_view = st.radio(
         "Archive view",
         ("All", "Shows (series)", "Movies/programs"),
@@ -1880,13 +2260,26 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
     else:
         option_keys = list(all_option_keys)
 
-    movie_groups = _movie_semantic_groups(str(cfg_path.resolve()))
+    movie_groups = _nikki_movie_semantic_groups(str(nikki_path.resolve()), _nikki_mtime(nikki_path))
+    movie_groups.update(_movie_semantic_groups(str(cfg_path.resolve())))
+    for name, rows in imported_rows_by_name.items():
+        genre = ""
+        for r in rows:
+            g = str(r.get("genre") or "").strip().lower()
+            if g:
+                genre = g
+                break
+        if genre:
+            for kk in _title_key_variants(name):
+                movie_groups[kk] = genre
     genre_vals = sorted(
         {
             _semantic_group_for_archive_option(cfg, opt, movie_groups) or "unlabeled"
             for opt in option_keys
         }
     )
+    if st.session_state.get("archive_genre_filter") not in (["All genres"] + genre_vals):
+        st.session_state["archive_genre_filter"] = "All genres"
     genre_pick = st.selectbox(
         "Genre filter",
         ["All genres"] + genre_vals,
@@ -1904,6 +2297,11 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
         return
 
     def _archive_option_label(opt: str) -> str:
+        imported = _parse_imported_content_option(opt)
+        if imported is not None:
+            rows = imported_rows_by_name.get(imported, [])
+            kind = "series import" if any(str(r.get("content_type") or "").lower() == "series" for r in rows) else "movie import"
+            return f"{imported} _({kind})_"
         raw_literal = _parse_literal_text_option(opt)
         if raw_literal is not None:
             return f"{raw_literal} _(from schedule)_"
@@ -1981,6 +2379,34 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
 
     if sel == none_opt:
         st.caption("Choose a show/movie/program to view details.")
+        return
+
+    imported_pick = _parse_imported_content_option(sel)
+    if imported_pick is not None:
+        rows = imported_rows_by_name.get(imported_pick, [])
+        st.caption("Imported catalog entry")
+        with _archive_detail_panel():
+            st.markdown(f"## {imported_pick}")
+            st.caption(f"Imported rows: **{len(rows)}**")
+            if rows:
+                genre_vals = sorted({str(r.get("genre") or "").strip() for r in rows if str(r.get("genre") or "").strip()})
+                if genre_vals:
+                    st.caption("Genre: " + ", ".join(genre_vals))
+                runtime_vals = sorted({str(r.get("runtime_minutes") or "").strip() for r in rows if r.get("runtime_minutes")})
+                if runtime_vals:
+                    st.caption("Runtime(s): " + ", ".join(f"{v}m" for v in runtime_vals))
+                meta_cols = [
+                    "content_type",
+                    "series_title",
+                    "episode_number",
+                    "episode_title",
+                    "genre",
+                    "runtime_minutes",
+                    "original_airdate",
+                    "production_company",
+                    "copyright",
+                ]
+                st.dataframe(pd.DataFrame(rows)[meta_cols].head(60), use_container_width=True, hide_index=True)
         return
 
     raw_literal = _parse_literal_text_option(sel)
