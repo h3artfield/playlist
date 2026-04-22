@@ -57,13 +57,93 @@ _RAW_LITERAL_PREFIX = "__literal_text__:"
 _IMPORTED_CONTENT_PREFIX = "__imported_content__:"
 
 
+def _available_base_schedule_files() -> list[str]:
+    cfg_dir = Path("config")
+    if not cfg_dir.is_dir():
+        return []
+    files: list[Path] = []
+    files.extend(cfg_dir.glob("*.yaml"))
+    files.extend(cfg_dir.glob("*.yml"))
+    uniq: dict[str, Path] = {}
+    for p in files:
+        if p.is_file():
+            uniq[p.as_posix()] = p
+    ordered = sorted(
+        uniq.values(),
+        key=lambda p: (float(p.stat().st_mtime) if p.exists() else 0.0, p.name.casefold()),
+        reverse=True,
+    )
+    return [p.as_posix() for p in ordered]
+
+
+def _friendly_date(d: date) -> str:
+    return f"{d.strftime('%b')} {d.day}, {d.year}"
+
+
+def _base_schedule_records() -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for p_str in _available_base_schedule_files():
+        p = Path(p_str)
+        try:
+            cfg = load_build_config(p)
+        except Exception:
+            continue
+        anchor: Optional[date] = None
+        cutoff = getattr(cfg, "reference_binge_literal_copy_before", None)
+        if cutoff:
+            try:
+                anchor = date.fromisoformat(str(cutoff)) - timedelta(days=1)
+            except Exception:
+                try:
+                    anchor = parse_monday(str(cutoff)) - timedelta(days=1)
+                except Exception:
+                    anchor = None
+        if anchor is None:
+            week_dates = [parse_monday(w.monday) + timedelta(days=6) for w in cfg.weeks]
+            anchor = max(week_dates) if week_dates else date.today()
+        window_start = anchor - timedelta(days=29)
+        mtime = float(p.stat().st_mtime) if p.exists() else 0.0
+        records.append(
+            {
+                "path": p.as_posix(),
+                "anchor": anchor,
+                "window_start": window_start,
+                "mtime": mtime,
+                "label": f"Last airdate: {_friendly_date(anchor)}",
+                "detail": f"Window: {_friendly_date(window_start)} -> {_friendly_date(anchor)}",
+            }
+        )
+    records.sort(key=lambda r: (r.get("anchor"), r.get("mtime")), reverse=True)
+    return records
+
+
+def _baseline_window_for_cfg(cfg) -> tuple[date, date]:
+    anchor: Optional[date] = None
+    cutoff = getattr(cfg, "reference_binge_literal_copy_before", None)
+    if cutoff:
+        try:
+            anchor = date.fromisoformat(str(cutoff)) - timedelta(days=1)
+        except Exception:
+            try:
+                anchor = parse_monday(str(cutoff)) - timedelta(days=1)
+            except Exception:
+                anchor = None
+    if anchor is None:
+        week_dates = [parse_monday(w.monday) + timedelta(days=6) for w in cfg.weeks]
+        anchor = max(week_dates) if week_dates else date.today()
+    return anchor - timedelta(days=29), anchor
+
+
 def _default_config_display() -> str:
     raw = (os.environ.get("BINGE_CONFIG_PATH") or os.environ.get("STREAMLIT_BINGE_CONFIG") or "").strip()
     if raw:
         return Path(raw).as_posix()
-    april = Path("config/april_2026.yaml")
-    if april.is_file():
-        return april.as_posix()
+    records = _base_schedule_records()
+    if records:
+        return str(records[0]["path"])
+    choices = _available_base_schedule_files()
+    if choices:
+        return str(choices[0])
     return Path("config/cloud.yaml").as_posix()
 
 
@@ -436,20 +516,47 @@ def _render_top_nav() -> str:
     with setup_col:
         if "main_setup_yaml" not in st.session_state:
             st.session_state["main_setup_yaml"] = _default_config_display()
-        if hasattr(st, "popover"):
-            with st.popover("Setup", use_container_width=True):
-                st.text_input(
-                    "Schedule setup (YAML)",
-                    key="main_setup_yaml",
-                    placeholder="config/april_2026.yaml",
-                )
-        else:
-            st.text_input(
-                "Setup file",
-                key="main_setup_yaml",
-                placeholder="config/april_2026.yaml",
-                label_visibility="collapsed",
+        base_records = _base_schedule_records()
+        base_choices = [str(r["path"]) for r in base_records]
+        record_by_path = {str(r["path"]): r for r in base_records}
+        custom_opt = "__custom__"
+
+        def _render_base_schedule_picker() -> None:
+            current = str(st.session_state.get("main_setup_yaml", "")).strip()
+            opts = list(base_choices) + [custom_opt]
+            default_idx = opts.index(current) if current in opts else len(opts) - 1
+            pick = st.selectbox(
+                "Base schedule version",
+                opts,
+                index=default_idx,
+                key="main_base_schedule_pick",
+                format_func=lambda v: (
+                    str(record_by_path.get(str(v), {}).get("label"))
+                    if str(v) in record_by_path
+                    else "Other (advanced)"
+                ),
             )
+            if "main_setup_yaml_custom" not in st.session_state:
+                st.session_state["main_setup_yaml_custom"] = current if current not in base_choices else ""
+            rec = record_by_path.get(str(pick))
+            if rec is not None:
+                st.caption(str(rec.get("detail") or ""))
+            if pick == custom_opt:
+                custom_val = st.text_input(
+                    "Custom base schedule file",
+                    key="main_setup_yaml_custom",
+                    placeholder="config/may_test.yaml",
+                ).strip()
+                if custom_val:
+                    st.session_state["main_setup_yaml"] = custom_val
+            else:
+                st.session_state["main_setup_yaml"] = str(pick)
+
+        if hasattr(st, "popover"):
+            with st.popover("Base schedule", use_container_width=True):
+                _render_base_schedule_picker()
+        else:
+            _render_base_schedule_picker()
     if page is None:
         return _NAV_BUILD
     return str(page)
@@ -560,7 +667,7 @@ def _render_archive_episode_browser(
     st.markdown("### Episodes")
     if browse_only:
         st.caption(
-            "Browse only — not on the schedule until you add this tab under **`nikki_sheet`** in your setup. "
+            "Browse only — not on the schedule until you add this tab under **`nikki_sheet`** in your base schedule. "
             "**Create BINGE files** skips it until then."
         )
     if sd.nikki_row_filter == nikki.ROW_FILTER_GREEN_EPISODE_CELL:
@@ -572,14 +679,14 @@ def _render_archive_episode_browser(
             f"Row filter `{sd.nikki_row_filter}` — table matches what **Create BINGE files** would load."
         )
     if not nikki_path.is_file():
-        st.warning("Spreadsheet file not found — check **nikki_workbook** in your setup.")
+        st.warning("Spreadsheet file not found — check **nikki_workbook** in your base schedule.")
         return
     if not sd.nikki_sheet:
         st.info("This show has no **nikki_sheet**; there is no Excel tab to list.")
         return
     if sheet_ok is False:
         st.error(
-            "Your workbook has no tab with this exact name. Fix **nikki_sheet** in the setup or rename the tab in Excel."
+            "Your workbook has no tab with this exact name. Fix **nikki_sheet** in the base schedule or rename the tab in Excel."
         )
         return
     if sheet_ok is None:
@@ -613,7 +720,7 @@ def _render_archive_episode_browser(
 
     st.caption(
         f"**{len(rows)}** rows — schedule **#** column matches **Create BINGE files**"
-        + (" (when on the schedule)." if not browse_only else " (browse only until added to setup).")
+        + (" (when on the schedule)." if not browse_only else " (browse only until added to base schedule).")
         + " Click a row for detail."
     )
 
@@ -2019,7 +2126,7 @@ def _render_binge_grids_preview(
             st.info(
                 "**After the BINGE build:** select the **row** you’re replacing, then **Swap for…** and pick **whatever show** "
                 "you want from the archive. **Time and day stay the same** — only the program in that slot changes in your **grids** "
-                "(and the setup file if the show is new). Run **Create BINGE files** again on **Create Schedule** so the spreadsheet matches."
+                "(and the base schedule file if the show is new). Run **Create BINGE files** again on **Create Schedule** so the spreadsheet matches."
             )
             st.caption("One row → **Swap for… → Available Content** → confirm.")
             if picked_row_idx is not None:
@@ -2565,11 +2672,11 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
         st.markdown(f"## {sd.display_name}")
         if browse_only:
             st.caption(
-                "Browse only — add this show to your **setup file** on the schedule (with the same **`nikki_sheet`** "
+                "Browse only — add this show to your **base schedule file** (with the same **`nikki_sheet`** "
                 "name as this tab) so **Create BINGE files** can use it."
             )
         else:
-            st.caption(f"Setup key `{sel}`")
+            st.caption(f"Base schedule key `{sel}`")
 
         if sd.kind == "series":
             style = sd.nikki_style or (
@@ -2603,7 +2710,7 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
                 elif nikki_path.is_file():
                     st.warning("Could not read the spreadsheet file.")
                 else:
-                    st.warning("Spreadsheet path missing in setup.")
+                    st.warning("Spreadsheet path missing in base schedule.")
                 if nikki_path.is_file():
                     if st.button(
                         "Open folder",
@@ -2640,7 +2747,7 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
             st.metric("Kind", "Literal")
             st.caption(
                 "To swap a literal slot, edit the grid Excel for that week or change how the cell text "
-                "maps to **display_name** in your setup—use **Create Schedule** to confirm names match."
+                "maps to **display_name** in your base schedule—use **Create Schedule** to confirm names match."
             )
 
 
@@ -2815,18 +2922,18 @@ def _render_schedule_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
     st.divider()
     st.markdown("##### Make changes")
     st.caption(
-        "**Edit schedules** in your sources: episodes, order, and show keys live in the setup YAML and Nikki spreadsheet — "
+        "**Edit schedules** in your sources: episodes, order, and show keys live in the base schedule YAML and Nikki spreadsheet — "
         "not only inside the export files. Edit those, then run **Create BINGE files** again on **Create Schedule**."
     )
     setup_abs = cfg_path.resolve()
-    st.markdown(f"- **Setup (YAML):** `{setup_abs}`")
+    st.markdown(f"- **Base schedule (YAML):** `{setup_abs}`")
     st.markdown(f"- **Content workbook:** `{nikki_path.resolve()}`")
     cur = resolved_cursor_state_path(cfg)
     if cur:
         st.markdown(f"- **Episode cursors:** `{cur}`")
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("Open setup folder", use_container_width=True, key="pl_open_cfg"):
+        if st.button("Open base schedule folder", use_container_width=True, key="pl_open_cfg"):
             err = _open_folder(setup_abs.parent)
             if err and "download buttons" not in err:
                 st.error(err)
@@ -2840,7 +2947,7 @@ def _render_schedule_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
             elif err:
                 st.info(err)
         elif not nikki_path.is_file():
-            st.caption("Nikki path missing — fix **nikki_workbook** in the setup file.")
+            st.caption("Nikki path missing — fix **nikki_workbook** in the base schedule file.")
 
 
 def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
@@ -2852,25 +2959,25 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         return
 
     if not cfg.weeks:
-        st.error("No **weeks** in your setup file — add week lines or use another setup file.")
+        st.error("No **weeks** in your base schedule file — add week lines or use another base schedule file.")
         return
 
     months_all = _months_for_build_selector(cfg.weeks)
     if not months_all:
-        st.error("No weeks with valid dates in your setup file.")
+        st.error("No weeks with valid dates in your base schedule file.")
         return
 
     pipeline = _pipeline_months(months_all, cfg.build_sequence_start)
     if not pipeline:
         st.error(
-            "No months left in the build sequence — check **weeks** dates and **build_sequence_start** in your setup."
+            "No months left in the build sequence — check **weeks** dates and **build_sequence_start** in your base schedule."
         )
         return
 
     completed = _load_completed_months(cfg_path)
     unlocked = _unlocked_months(pipeline, completed)
     if not unlocked:
-        st.error("Could not determine which month to build — check **weeks** in your setup.")
+        st.error("Could not determine which month to build — check **weeks** in your base schedule.")
         return
 
     buildable_weeks = _weeks_for_unlocked_months(cfg.weeks, unlocked)
@@ -2880,6 +2987,12 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     if not buildable_weeks:
         st.error("No weeks are currently unlocked to build from your reference cutoff.")
         return
+
+    base_window_start, base_anchor = _baseline_window_for_cfg(cfg)
+    st.caption(
+        f"Baseline last airdate: **{_friendly_date(base_anchor)}** · "
+        f"rolling window: **{_friendly_date(base_window_start)} -> {_friendly_date(base_anchor)}**"
+    )
 
     prev_m = st.session_state.get("_build_month_iso")
     cur_m = parse_monday(buildable_weeks[0].monday).isoformat()
@@ -3953,7 +4066,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         if created_grids:
             st.success(
                 "Created **grids** workbook shell(s). On export, the app copies the **previous month's** "
-                "Mon-Sun program into blank weeks when that month is in your setup (e.g. April to May):\n"
+                "Mon-Sun program into blank weeks when that month is in your base schedule (e.g. April to May):\n"
                 + "\n".join(f"- `{p}`" for p in created_grids)
             )
         missing_grids: list[str] = []
@@ -4053,7 +4166,7 @@ def main() -> None:
 
     cfg_path = Path(st.session_state["main_setup_yaml"])
     if not cfg_path.is_file():
-        st.error(f"Setup file not found: `{cfg_path.resolve()}`")
+        st.error(f"Base schedule file not found: `{cfg_path.resolve()}`")
         st.stop()
 
     cfg = load_build_config(cfg_path)
