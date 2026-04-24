@@ -279,7 +279,7 @@ def _regenerate_binge_for_month(
             cfg, out_dir, weeks=weeks, export_stations=station_kw
         )
     except Exception as e:
-        return False, [f"**Create BINGE files** failed after swap: {e}"], None
+        return False, [f"**Create Schedule** failed after swap: {e}"], None
 
     msgs: list[str] = [
         f"Automatically regenerated **BINGE.xlsx** and **BINGE GRIDS.xlsx** for **{month_start.strftime('%B %Y')}** "
@@ -668,15 +668,15 @@ def _render_archive_episode_browser(
     if browse_only:
         st.caption(
             "Browse only — not on the schedule until you add this tab under **`nikki_sheet`** in your base schedule. "
-            "**Create BINGE files** skips it until then."
+            "**Create Schedule** skips it until then."
         )
     if sd.nikki_row_filter == nikki.ROW_FILTER_GREEN_EPISODE_CELL:
         st.caption(
-            "Only **green** Episode cells count (same rule as **Create BINGE files**); other rows on this sheet are ignored."
+            "Only **green** Episode cells count (same rule as **Create Schedule**); other rows on this sheet are ignored."
         )
     elif sd.nikki_row_filter:
         st.caption(
-            f"Row filter `{sd.nikki_row_filter}` — table matches what **Create BINGE files** would load."
+            f"Row filter `{sd.nikki_row_filter}` — table matches what **Create Schedule** would load."
         )
     if not nikki_path.is_file():
         st.warning("Spreadsheet file not found — check **nikki_workbook** in your base schedule.")
@@ -710,7 +710,7 @@ def _render_archive_episode_browser(
     if not rows:
         if sd.nikki_row_filter == nikki.ROW_FILTER_GREEN_EPISODE_CELL:
             st.warning(
-                "**No green Episode cells matched.** **Create BINGE files** would also get an empty list for this "
+                "**No green Episode cells matched.** **Create Schedule** would also get an empty list for this "
                 "show—confirm playable rows use the expected green fill on the Episode column, and that "
                 "**nikki_workbook** points at the real file (not a placeholder)."
             )
@@ -719,7 +719,7 @@ def _render_archive_episode_browser(
         return
 
     st.caption(
-        f"**{len(rows)}** rows — schedule **#** column matches **Create BINGE files**"
+        f"**{len(rows)}** rows — schedule **#** column matches **Create Schedule**"
         + (" (when on the schedule)." if not browse_only else " (browse only until added to base schedule).")
         + " Click a row for detail."
     )
@@ -2126,7 +2126,7 @@ def _render_binge_grids_preview(
             st.info(
                 "**After the BINGE build:** select the **row** you’re replacing, then **Swap for…** and pick **whatever show** "
                 "you want from the archive. **Time and day stay the same** — only the program in that slot changes in your **grids** "
-                "(and the base schedule file if the show is new). Run **Create BINGE files** again on **Create Schedule** so the spreadsheet matches."
+                "(and the base schedule file if the show is new). Run **Create Schedule** again so the spreadsheet matches."
             )
             st.caption("One row → **Swap for… → Available Content** → confirm.")
             if picked_row_idx is not None:
@@ -2673,7 +2673,7 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
         if browse_only:
             st.caption(
                 "Browse only — add this show to your **base schedule file** (with the same **`nikki_sheet`** "
-                "name as this tab) so **Create BINGE files** can use it."
+                "name as this tab) so **Create Schedule** can use it."
             )
         else:
             st.caption(f"Base schedule key `{sel}`")
@@ -2737,7 +2737,7 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
                         st.code(sd.nikki_row_filter, language=None)
                         if sd.nikki_row_filter == nikki.ROW_FILTER_GREEN_EPISODE_CELL:
                             st.caption(
-                                "Only green-filled **Episode** cells count for the schedule; **Create BINGE files** "
+                                "Only green-filled **Episode** cells count for the schedule; **Create Schedule** "
                                 "uses the same rule, and this table matches it."
                             )
                     else:
@@ -2835,13 +2835,13 @@ def _render_schedule_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
         elif sr.get("auto_export_ok") is False:
             st.success(
                 f"**Grids updated** for that slot: **{', '.join(sr['old_show_labels'])}** → **{sr['new_display']}** "
-                f"(`{sr['archive_pick']}`). **BINGE export** did not run automatically — use **Create BINGE files** on **Create Schedule**, "
+                f"(`{sr['archive_pick']}`). **BINGE export** did not run automatically — use **Create Schedule**, "
                 "or see *What changed* for details."
             )
         else:
             st.success(
                 f"**Grids updated** for that slot: **{', '.join(sr['old_show_labels'])}** → **{sr['new_display']}** "
-                f"(`{sr['archive_pick']}`). Run **Create BINGE files** on **Create Schedule** to refresh **BINGE.xlsx**."
+                f"(`{sr['archive_pick']}`). Run **Create Schedule** to refresh **BINGE.xlsx**."
             )
         msgs = sr.get("messages") or []
         if msgs:
@@ -2907,7 +2907,7 @@ def _render_schedule_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
         )
 
     if "binge_path" not in st.session_state:
-        st.info("Nothing generated yet — go to **Create Schedule** and run **Create BINGE files**.")
+        st.info("Nothing generated yet — go to **Create Schedule** and run it.")
     else:
         st.markdown("##### Latest files")
         _render_last_build_outputs(cfg, cfg_path)
@@ -2923,7 +2923,7 @@ def _render_schedule_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
     st.markdown("##### Make changes")
     st.caption(
         "**Edit schedules** in your sources: episodes, order, and show keys live in the base schedule YAML and Nikki spreadsheet — "
-        "not only inside the export files. Edit those, then run **Create BINGE files** again on **Create Schedule**."
+        "not only inside the export files. Edit those, then run **Create Schedule** again."
     )
     setup_abs = cfg_path.resolve()
     st.markdown(f"- **Base schedule (YAML):** `{setup_abs}`")
@@ -3747,7 +3747,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 key="build_mass_confirm",
             )
 
-    st.markdown("##### Preview changes")
+    st.markdown("##### Preview schedule")
     st.caption("This run uses the selected start date/week count, plus optional OTO/mass changes below.")
     st.markdown(
         "\n".join(
@@ -3781,12 +3781,12 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         else:
             oto_name = _display_name_for_archive_pick(cfg, oto_pick) if oto_pick else "—"
         st.markdown(
-            f"- OTO: **{len(oto_rows)}** block(s), duration **{oto_dur}**, replacement **{oto_name}**, mode **{oto_mode_label}**"
+            f"- Schedule: **{len(oto_rows)}** block(s), duration **{oto_dur}**, replacement **{oto_name}**, mode **{oto_mode_label}**"
         )
         if oto_timing_notes:
-            st.markdown(f"- OTO timing notes: **{len(oto_timing_notes)}**")
+            st.markdown(f"- Schedule timing notes: **{len(oto_timing_notes)}**")
     else:
-        st.markdown("- OTO: none")
+        st.markdown("- Schedule: none")
     if use_mass:
         mass_dur = _format_duration_minutes(sum(int(r["duration_minutes"]) for r in mass_rows)) if mass_rows else "0m"
         mass_name = _display_name_for_archive_pick(cfg, mass_pick) if mass_pick else "—"
@@ -3842,7 +3842,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     )
 
     run = st.button(
-        "Create BINGE files",
+        "Create Schedule",
         type="primary",
         use_container_width=True,
         disabled=bool(preflight_issues),
@@ -4091,7 +4091,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                             "Schedule window": (
                                 f"start={start_date.isoformat()} · weeks={len(selected_weeks)}"
                             ),
-                            "OTO changes": (
+                            "Schedule changes": (
                                 f"{len(oto_overrides)} row override(s)"
                                 if oto_overrides
                                 else "none"
@@ -4101,7 +4101,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                                 if use_mass and mass_rows
                                 else "none"
                             ),
-                            "OTO timing notes": (
+                            "Schedule timing notes": (
                                 " | ".join(oto_timing_notes[:6]) if oto_timing_notes else "none"
                             ),
                         },
