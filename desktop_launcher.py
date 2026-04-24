@@ -51,6 +51,16 @@ def _resolve_app_script() -> Path:
     for p in candidates:
         if p.is_file():
             return p
+    search_roots = [exe_dir, here]
+    if meipass is not None:
+        search_roots.append(meipass)
+    for root in search_roots:
+        try:
+            for p in root.rglob("streamlit_app.py"):
+                if p.is_file():
+                    return p
+        except Exception:
+            continue
     raise FileNotFoundError(
         "Could not find bundled streamlit_app.py. Tried: "
         + ", ".join(str(p) for p in candidates)
@@ -62,7 +72,9 @@ def main() -> int:
     with log_path.open("w", encoding="utf-8") as logf:
         try:
             app_path = _resolve_app_script()
+            logf.write(f"Resolved app path: {app_path}\n")
             os.chdir(app_path.parent)
+            logf.write(f"Working directory: {app_path.parent}\n")
             # Avoid telemetry prompts and keep desktop behavior predictable.
             os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
             sys.argv = [
@@ -85,9 +97,11 @@ def main() -> int:
             return rc
         except Exception:
             logf.write(traceback.format_exc())
+            logf.flush()
+            err = traceback.format_exc().strip().splitlines()[-1] if traceback.format_exc().strip() else "Unknown error"
             _show_error_dialog(
                 "Schedule Builder failed to start",
-                f"An error occurred while starting the app.\n\nLog file:\n{log_path}",
+                f"An error occurred while starting the app.\n\n{err}\n\nLog file:\n{log_path}",
             )
             return 1
 
