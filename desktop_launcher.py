@@ -77,13 +77,12 @@ def main() -> int:
             logf.write(f"Working directory: {app_path.parent}\n")
             # Avoid telemetry prompts and keep desktop behavior predictable.
             os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
+            os.environ.setdefault("STREAMLIT_GLOBAL_DEVELOPMENT_MODE", "false")
             sys.argv = [
                 "streamlit",
                 "run",
                 str(app_path),
                 "--server.headless=false",
-                "--server.address=127.0.0.1",
-                "--server.port=8501",
                 "--browser.gatherUsageStats=false",
                 "--server.fileWatcherType=none",
             ]
