@@ -51,6 +51,14 @@ Send that link to anyone who should use the UI. They need a browser only.
 - **Cloud:** the sidebar defaults to **`config/cloud.yaml`** (Gracenote ID only; no real content workbook).
 - **Your machine:** you can type **`config/april_2026.yaml`** (or any path) in the sidebar if you use paths that exist on disk.
 
+## Optional: Desktop installer download button
+
+If you want users to download a Windows installer from inside the app, configure a hosted installer URL and show a CTA in Streamlit.
+
+See: `docs/DESKTOP_APP_DOWNLOAD.md`
+
+To build/publish the installer itself, see: `docs/WINDOWS_DESKTOP_RELEASE.md`
+
 ## Updates
 
 Push to `main`; Streamlit usually **redeploys automatically** (or use “Reboot app” in settings if something sticks).

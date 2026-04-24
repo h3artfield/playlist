@@ -57,6 +57,47 @@ _RAW_LITERAL_PREFIX = "__literal_text__:"
 _IMPORTED_CONTENT_PREFIX = "__imported_content__:"
 
 
+def _secret_or_env(key: str) -> str:
+    val = str(os.environ.get(key, "") or "").strip()
+    if val:
+        return val
+    try:
+        sval = st.secrets.get(key, "")  # type: ignore[attr-defined]
+    except Exception:
+        return ""
+    return str(sval or "").strip()
+
+
+def _desktop_download_meta() -> dict[str, str]:
+    url = _secret_or_env("DESKTOP_APP_DOWNLOAD_URL")
+    if not url:
+        repo = _secret_or_env("DESKTOP_APP_GITHUB_REPO") or "h3artfield/playlist"
+        url = f"https://github.com/{repo}/releases/latest/download/ScheduleBuilderSetup.exe"
+    return {
+        "url": url,
+        "label": _secret_or_env("DESKTOP_APP_LABEL") or "Download Desktop App (Windows)",
+        "version": _secret_or_env("DESKTOP_APP_VERSION"),
+        "notes_url": _secret_or_env("DESKTOP_APP_RELEASE_NOTES_URL"),
+    }
+
+
+def _render_desktop_download_cta() -> None:
+    meta = _desktop_download_meta()
+    if not meta:
+        return
+    c1, c2 = st.columns([3, 2], vertical_alignment="center")
+    with c1:
+        extra = f" (v{meta['version']})" if meta.get("version") else ""
+        st.caption(f"Install Schedule Builder locally on Windows{extra}.")
+    with c2:
+        if hasattr(st, "link_button"):
+            st.link_button(meta["label"], meta["url"], use_container_width=True, type="primary")
+        else:
+            st.markdown(f"[{meta['label']}]({meta['url']})")
+    if meta.get("notes_url"):
+        st.caption(f"[Release notes]({meta['notes_url']})")
+
+
 def _available_base_schedule_files() -> list[str]:
     cfg_dir = Path("config")
     if not cfg_dir.is_dir():
@@ -3088,7 +3129,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     st.markdown("##### Optional schedule changes")
     st.caption("OTO/mass block pickers are limited to the selected weeks above.")
     use_oto = st.checkbox(
-        "Apply OTO (one-time-only) changes for this output",
+        "Apply OTO (one-time-only) changes for this schedule",
         key="build_use_oto_changes",
     )
     oto_rows: list[dict[str, Any]] = []
@@ -4163,6 +4204,7 @@ def main() -> None:
     page = _render_top_nav()
 
     st.divider()
+    _render_desktop_download_cta()
 
     cfg_path = Path(st.session_state["main_setup_yaml"])
     if not cfg_path.is_file():

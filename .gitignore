@@ -7,6 +7,9 @@ __pycache__/
 .mypy_cache/
 .idea/
 out/
+build/
+dist/
+packaging/windows/Output/
 *.xlsx~
 ~$*.xlsx
 .streamlit/secrets.toml
