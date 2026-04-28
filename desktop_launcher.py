@@ -37,6 +37,15 @@ def _show_error_dialog(title: str, message: str) -> None:
         pass
 
 
+def _ensure_streamlit_credentials() -> None:
+    """Prevent first-run stdin onboarding prompt in packaged launches."""
+    cfg_dir = Path.home() / ".streamlit"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    creds = cfg_dir / "credentials.toml"
+    if not creds.is_file():
+        creds.write_text('[general]\nemail = ""\n', encoding="utf-8")
+
+
 def _resolve_app_script() -> Path:
     here = Path(__file__).resolve().parent
     exe_dir = Path(sys.executable).resolve().parent
@@ -75,18 +84,17 @@ def main() -> int:
             logf.write(f"Resolved app path: {app_path}\n")
             os.chdir(app_path.parent)
             logf.write(f"Working directory: {app_path.parent}\n")
+            _ensure_streamlit_credentials()
+            logf.write("Ensured Streamlit credentials file.\n")
             # Avoid telemetry prompts and keep desktop behavior predictable.
             os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
             os.environ.setdefault("STREAMLIT_GLOBAL_DEVELOPMENT_MODE", "false")
-            # Prevent first-run email prompt (no stdin in packaged desktop launch).
-            os.environ.setdefault("STREAMLIT_GLOBAL_EMAIL", "schedulebuilder@local")
             sys.argv = [
                 "streamlit",
                 "run",
                 str(app_path),
                 "--server.headless=false",
                 "--browser.gatherUsageStats=false",
-                "--global.email=schedulebuilder@local",
                 "--server.fileWatcherType=none",
             ]
             with contextlib.redirect_stdout(logf), contextlib.redirect_stderr(logf):
