@@ -82,6 +82,8 @@ def _desktop_download_meta() -> dict[str, str]:
 
 
 def _render_desktop_download_cta() -> None:
+    if _secret_or_env("SCHEDULE_BUILDER_DESKTOP_RUNTIME") == "1":
+        return
     meta = _desktop_download_meta()
     if not meta:
         return

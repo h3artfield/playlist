@@ -86,6 +86,8 @@ def main() -> int:
             logf.write(f"Working directory: {app_path.parent}\n")
             _ensure_streamlit_credentials()
             logf.write("Ensured Streamlit credentials file.\n")
+            # Desktop installs should not show the desktop download CTA.
+            os.environ.setdefault("SCHEDULE_BUILDER_DESKTOP_RUNTIME", "1")
             # Avoid telemetry prompts and keep desktop behavior predictable.
             os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
             os.environ.setdefault("STREAMLIT_GLOBAL_DEVELOPMENT_MODE", "false")
