@@ -78,12 +78,15 @@ def main() -> int:
             # Avoid telemetry prompts and keep desktop behavior predictable.
             os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
             os.environ.setdefault("STREAMLIT_GLOBAL_DEVELOPMENT_MODE", "false")
+            # Prevent first-run email prompt (no stdin in packaged desktop launch).
+            os.environ.setdefault("STREAMLIT_GLOBAL_EMAIL", "schedulebuilder@local")
             sys.argv = [
                 "streamlit",
                 "run",
                 str(app_path),
                 "--server.headless=false",
                 "--browser.gatherUsageStats=false",
+                "--global.email=schedulebuilder@local",
                 "--server.fileWatcherType=none",
             ]
             with contextlib.redirect_stdout(logf), contextlib.redirect_stderr(logf):
