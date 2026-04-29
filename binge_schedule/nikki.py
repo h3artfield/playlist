@@ -471,6 +471,10 @@ def load_standard_sheet(
             if t:
                 code, epn = t
             else:
+                # Texan sheet marks missing episodes as title-only rows (e.g., "Borrowed Time")
+                # without an Sx_EPy code in the Episode cell. In this filter mode, skip them.
+                if row_filter == ROW_FILTER_EXCLUDE_RED_EPISODE_TEXT:
+                    continue
                 n = _num_from_season_ep(season_ep)
                 if n is not None:
                     code, epn = f"TEX{n}", n
