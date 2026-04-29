@@ -758,7 +758,12 @@ def export_both(
         grid_raw = load_grid_sheet(wk.grids_file, wk.sheet_name)
         label = sheet_label(wk.monday)
         rows = rows_for_week(
-            cfg, cat, grid_raw, wk.monday, episode_actions=episode_actions
+            cfg,
+            cat,
+            grid_raw,
+            wk.monday,
+            episode_actions=episode_actions,
+            prev_completed_week_binge_df=prev_merged_df,
         )
         df_norm = normalize_binge_df_columns(binge_rows_to_dataframe(rows))
         merged_df, _literal_notes = merge_literal_reference_binge_days(cfg, mon, df_norm)

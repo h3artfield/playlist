@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 
+import pandas as pd
+
 from binge_schedule.grid import (
     combine_date_time,
     day_dates,
@@ -15,7 +17,115 @@ from binge_schedule.cursor_state import resolved_nikki_workbook_path
 from binge_schedule.models import BingeRow, BuildConfig, Catalog, Episode, ShowDef
 from binge_schedule.show_resolve import resolve_show
 from binge_schedule import nikki
+from binge_schedule.binge_to_grid import normalize_binge_df_columns
 
+from binge_schedule.overnight_repeat import (
+    LATE_END,
+    LATE_START,
+    _episode_for_code as _episode_for_catalog_code,
+    _overnight_repeat_mode,
+)
+
+
+def _norm_binge_date(obj: object) -> date:
+    if hasattr(obj, "date") and callable(getattr(obj, "date")):
+        obj = obj.date()
+    assert isinstance(obj, date)
+    return obj
+
+
+def _binge_row_start_mins_midnight(br: BingeRow) -> int:
+    hs = str(br.start).replace(":", " ").split()
+    h, m = int(hs[0]), int(hs[1]) if len(hs) > 1 else 0
+    # Treat 24:xx as prior day edge if ever seen; grid uses 0:004:00 overnight.
+    return h * 60 + m
+
+
+def _late_series_eps_prior_day_default_pattern(
+    cfg: BuildConfig,
+    cat: Catalog,
+    series_key: str,
+    prior_day: date,
+    completed_rows: list[BingeRow],
+    prev_completed_week_df: Optional[pd.DataFrame],
+) -> list[Episode]:
+    """Chronological Episode objects for ``series_key`` on ``prior_day`` in 20:0024:00."""
+
+    cand: list[tuple[int, Episode]] = []
+    seen: set[tuple[int, str]] = set()
+
+    def append_ep(minutes: int, ep_o: Episode) -> None:
+        sig = (minutes, str(ep_o.code))
+        if sig in seen:
+            return
+        seen.add(sig)
+        cand.append((minutes, ep_o))
+
+    for br in completed_rows:
+        rk, _sd = resolve_show(br.show, cfg.shows)
+        if rk != series_key:
+            continue
+        d0 = _norm_binge_date(br.date)
+        if d0 != prior_day:
+            continue
+        m = _binge_row_start_mins_midnight(br)
+        if not (LATE_START <= m < LATE_END):
+            continue
+        code_raw = str(br.episode).strip()
+        if not code_raw or code_raw.upper() == "MOVIE":
+            continue
+        ep_o = _episode_for_catalog_code(cat, series_key, code_raw)
+        if ep_o is None:
+            continue
+        append_ep(m, ep_o)
+
+    if prev_completed_week_df is not None:
+        from binge_schedule.binge_to_grid import _find_col, parse_binge_date_cell, parse_binge_time_cell
+
+        df = normalize_binge_df_columns(prev_completed_week_df.copy())
+        c_date = _find_col(df, "DATE")
+        c_start = _find_col(df, "START TIME")
+        c_show = _find_col(df, "SHOW")
+        c_ep = _find_col(df, "EPISODE")
+        for _, row in df.iterrows():
+            try:
+                rd = parse_binge_date_cell(row[c_date])
+            except (ValueError, TypeError):
+                continue
+            if rd != prior_day:
+                continue
+            rk, _sd = resolve_show(str(row[c_show]).strip() if pd.notna(row[c_show]) else "", cfg.shows)
+            if rk != series_key:
+                continue
+            try:
+                t = parse_binge_time_cell(row[c_start])
+            except (ValueError, TypeError):
+                continue
+            m = t.hour * 60 + t.minute
+            if not (LATE_START <= m < LATE_END):
+                continue
+            code_raw = str(row[c_ep]).strip() if pd.notna(row[c_ep]) else ""
+            if not code_raw or code_raw.upper() == "MOVIE":
+                continue
+            ep_o = _episode_for_catalog_code(cat, series_key, code_raw)
+            if ep_o is None:
+                continue
+            append_ep(m, ep_o)
+
+    cand.sort(key=lambda x: x[0])
+    return [e for _m, e in cand]
+
+
+def _segment_default_daily_overnight_early(sd: ShowDef, seg, d: date) -> bool:
+    if sd.kind != "series" or _overnight_repeat_mode(sd.overnight_repeat_after) != "daily":
+        return False
+    pat = (sd.overnight_repeat_pattern or "default").strip().lower()
+    if pat != "default":
+        return False
+    if sd.overnight_repeat_morning_weekdays is not None:
+        if d.weekday() not in sd.overnight_repeat_morning_weekdays:
+            return False
+    return seg.start_slot >= 0 and seg.end_slot <= 8
 
 def _short_program_title(cell: str) -> str:
     line = cell.split("\n")[0].strip()
@@ -123,6 +233,7 @@ def rows_for_week(
     monday_s: str,
     *,
     episode_actions: Optional[EpisodeActionMap] = None,
+    prev_completed_week_binge_df: Optional[pd.DataFrame] = None,
 ) -> list[BingeRow]:
     """Turn one week’s **grids** program into BINGE rows.
 
@@ -135,6 +246,10 @@ def rows_for_week(
     show in that clock slot, there is no pattern for your show there—only **schedule / air order** (``next_episode``).
     **30-minute** series (default): one BINGE row per half-hour. **60** / **120** ``binge_row_minutes`` merge grid
     half-hours into one row per episode block (April template); reference BINGE typos do not override YAML.
+
+    For shows with ``overnight_repeat_after`` matching the **default daily** fringe rule, segments in **0:00–4:00**
+    reuse the prior calendar day’s late-fringe episodes (Nikki advances only afterward). Monday mornings use rows
+    from ``prev_completed_week_binge_df`` when the grid run has not produced Sunday night yet.
     """
     monday = parse_monday(monday_s)
     dates = day_dates(monday)
@@ -225,6 +340,42 @@ def rows_for_week(
             wd = d.weekday()
             brm = int(getattr(sd, "binge_row_minutes", 30) or 30)
             want_slots = brm // 30 if brm > 30 and brm % 30 == 0 else 0
+
+            prior_day = d - timedelta(days=1)
+            if (
+                brm == 30
+                and want_slots == 0
+                and _segment_default_daily_overnight_early(sd, seg, d)
+            ):
+                late_eps = _late_series_eps_prior_day_default_pattern(
+                    cfg,
+                    cat,
+                    key,
+                    prior_day,
+                    rows,
+                    prev_completed_week_binge_df,
+                )
+                n_need = n_slots
+                if len(late_eps) >= n_need:
+                    tail = late_eps[-n_need:]
+                    for kdx in range(n_need):
+                        slot = seg.start_slot + kdx
+                        ep = tail[kdx]
+                        emitted[(key, wd, slot)] = ep
+                        st_dt = combine_date_time(d, slot_clock_to_time(slot))
+                        fin_dt = st_dt + timedelta(minutes=30)
+                        rows.append(
+                            BingeRow(
+                                date=d,
+                                start=_fmt_time(st_dt),
+                                finish=_fmt_time(fin_dt),
+                                episode=ep.code,
+                                show=sd.display_name,
+                                episode_num=ep.episode_num,
+                                episode_name=ep.title,
+                            )
+                        )
+                    continue
 
             if want_slots > 0 and n_slots == want_slots:
                 slot0 = seg.start_slot
