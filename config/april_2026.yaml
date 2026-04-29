@@ -49,6 +49,8 @@ shows:
     semantic_group: western
     nikki_sheet: "The Texan - Note - missing epis"
     prefix: TEX
+    # Skip missing entries marked in red text on the Texan sheet.
+    nikki_row_filter: exclude_red_episode_text
     # 30-minute episodes (one BINGE row per half-hour). Some April BINGE rows have bad end times — source typo, not 2h.
     binge_row_minutes: 30
   hunter:

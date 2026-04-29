@@ -202,6 +202,17 @@ def _code_from_texan(cell: str) -> Optional[tuple[str, int]]:
     return None
 
 
+def _num_from_season_ep(season_ep: str) -> Optional[int]:
+    parts = str(season_ep).strip().split("_")
+    if len(parts) != 2:
+        return None
+    try:
+        a, b = int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+    return a * 100 + b
+
+
 def _code_from_renegade(cell: str) -> Optional[tuple[str, int]]:
     m = re.search(r"S(\d+)E(\d+)", cell, re.I)
     if m:
@@ -268,6 +279,7 @@ def _code_from_se_underscore(cell: str, prefix: str) -> Optional[tuple[str, int]
 
 # ``ShowDef.nikki_row_filter`` — extend when new per-sheet rules appear.
 ROW_FILTER_GREEN_EPISODE_CELL = "green_episode_cell"
+ROW_FILTER_EXCLUDE_RED_EPISODE_TEXT = "exclude_red_episode_text"
 
 
 def _rgb_string_from_openpyxl_color(color) -> Optional[str]:
@@ -307,6 +319,25 @@ def _is_schedule_green_fill(fill) -> bool:
     return False
 
 
+def _is_red_font(color) -> bool:
+    if color is None:
+        return False
+    rgb = getattr(color, "rgb", None)
+    if not isinstance(rgb, str):
+        return False
+    hx = rgb.replace(" ", "").upper()
+    if len(hx) < 6:
+        return False
+    tail = hx[-6:]
+    try:
+        r = int(tail[0:2], 16)
+        g = int(tail[2:4], 16)
+        b = int(tail[4:6], 16)
+    except ValueError:
+        return False
+    return r >= 170 and g <= 100 and b <= 100
+
+
 def _green_episode_row_indices(
     workbook_path: str,
     sheet_name: str,
@@ -336,6 +367,35 @@ def _green_episode_row_indices(
         wb.close()
 
 
+def _red_episode_text_row_indices(
+    workbook_path: str,
+    sheet_name: str,
+    *,
+    header_row: int,
+    ep_col: int,
+    n_df_rows: int,
+) -> set[int]:
+    """0-based DataFrame row indices whose Episode text font is red (missing episodes)."""
+    import openpyxl
+
+    out: set[int] = set()
+    try:
+        wb = openpyxl.load_workbook(workbook_path, read_only=False, data_only=False)
+    except OSError:
+        return out
+    try:
+        if sheet_name not in wb.sheetnames:
+            return out
+        ws = wb[sheet_name]
+        for i in range(header_row + 1, n_df_rows):
+            c = ws.cell(row=i + 1, column=ep_col + 1)
+            if _is_red_font(getattr(getattr(c, "font", None), "color", None)):
+                out.add(i)
+        return out
+    finally:
+        wb.close()
+
+
 def load_standard_sheet(
     df: pd.DataFrame,
     *,
@@ -354,6 +414,7 @@ def load_standard_sheet(
     se_col = col_idx.get("season_episode")
     start = hr + 1
     green_rows: Optional[set[int]] = None
+    red_text_rows: Optional[set[int]] = None
     if row_filter == ROW_FILTER_GREEN_EPISODE_CELL:
         if workbook_path and sheet_name:
             green_rows = _green_episode_row_indices(
@@ -365,11 +426,24 @@ def load_standard_sheet(
             )
         else:
             green_rows = set()
+    elif row_filter == ROW_FILTER_EXCLUDE_RED_EPISODE_TEXT:
+        if workbook_path and sheet_name:
+            red_text_rows = _red_episode_text_row_indices(
+                workbook_path,
+                sheet_name,
+                header_row=hr,
+                ep_col=ep_col,
+                n_df_rows=len(df),
+            )
+        else:
+            red_text_rows = set()
     out: list[Episode] = []
     for i in range(start, len(df)):
         if _skip_instruction_row(df, i, hr, col_idx):
             continue
         if green_rows is not None and i not in green_rows:
+            continue
+        if red_text_rows is not None and i in red_text_rows:
             continue
         cell = df.iloc[i, ep_col]
         if pd.isna(cell):
@@ -396,6 +470,10 @@ def load_standard_sheet(
             t = _code_from_texan(s)
             if t:
                 code, epn = t
+            else:
+                n = _num_from_season_ep(season_ep)
+                if n is not None:
+                    code, epn = f"TEX{n}", n
         elif style == "renegade":
             t = _code_from_renegade(s)
             if t:
