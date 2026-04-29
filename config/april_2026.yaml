@@ -116,6 +116,8 @@ shows:
     semantic_group: action_adventure
     nikki_sheet: "The Saint - NOTE - Episode titl"
     prefix: SNT
+    # Skip not-in-house episodes marked in red on the Saint sheet.
+    nikki_row_filter: exclude_red_episode_text
     binge_row_minutes: 60
   laugh_in:
     display_name: "Rowan & Martin's Laugh-In"

@@ -338,6 +338,28 @@ def _is_red_font(color) -> bool:
     return r >= 170 and g <= 100 and b <= 100
 
 
+def _is_red_fill(fill) -> bool:
+    if fill is None or fill.fill_type is None:
+        return False
+    ft = str(fill.fill_type).lower()
+    if ft not in ("solid", "patternfill"):
+        return False
+    hx = _rgb_string_from_openpyxl_color(getattr(fill, "start_color", None))
+    if not hx:
+        return False
+    hx = hx.replace(" ", "").upper()
+    if len(hx) < 6:
+        return False
+    tail = hx[-6:]
+    try:
+        r = int(tail[0:2], 16)
+        g = int(tail[2:4], 16)
+        b = int(tail[4:6], 16)
+    except ValueError:
+        return False
+    return r >= 170 and g <= 100 and b <= 100
+
+
 def _green_episode_row_indices(
     workbook_path: str,
     sheet_name: str,
@@ -375,7 +397,7 @@ def _red_episode_text_row_indices(
     ep_col: int,
     n_df_rows: int,
 ) -> set[int]:
-    """0-based DataFrame row indices whose Episode text font is red (missing episodes)."""
+    """0-based DataFrame row indices whose Episode cell is marked red (font or fill)."""
     import openpyxl
 
     out: set[int] = set()
@@ -389,7 +411,7 @@ def _red_episode_text_row_indices(
         ws = wb[sheet_name]
         for i in range(header_row + 1, n_df_rows):
             c = ws.cell(row=i + 1, column=ep_col + 1)
-            if _is_red_font(getattr(getattr(c, "font", None), "color", None)):
+            if _is_red_font(getattr(getattr(c, "font", None), "color", None)) or _is_red_fill(getattr(c, "fill", None)):
                 out.add(i)
         return out
     finally:
