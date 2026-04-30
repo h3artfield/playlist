@@ -3087,6 +3087,17 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
     min_day = parse_monday(buildable_weeks[0].monday)
     max_day = parse_monday(buildable_weeks[-1].monday) + timedelta(days=6)
     default_start = parse_monday(buildable_weeks[0].monday)
+    pending_start = st.session_state.pop("_pending_schedule_start_date", None)
+    if isinstance(pending_start, date):
+        if pending_start < min_day:
+            pending_start = min_day
+        elif pending_start > max_day:
+            pending_start = max_day
+        st.session_state["schedule_start_date"] = pending_start
+    pending_weeks = st.session_state.pop("_pending_schedule_week_count", None)
+    if isinstance(pending_weeks, int) and pending_weeks >= 1:
+        st.session_state["schedule_week_count"] = pending_weeks
+    auto_advance_msg = st.session_state.pop("_pending_auto_advance_msg", "")
     start_date = st.date_input(
         "Start date",
         value=default_start,
@@ -3110,6 +3121,8 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
             key="schedule_week_count",
         )
     )
+    if auto_advance_msg:
+        st.info(auto_advance_msg)
     selected_weeks = all_from_start[:week_count]
     selected_mondays = [w.monday for w in selected_weeks]
     st.caption(
@@ -4247,9 +4260,12 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                     _record_completed_month(cfg_path, date(y, m, 1))
                 next_start = _next_week_start_after_selection(selected_weeks, buildable_weeks)
                 if next_start is not None:
-                    st.session_state["schedule_start_date"] = next_start
-                    st.session_state["schedule_week_count"] = 1
-                    st.info(f"Next week auto-selected: `{next_start.isoformat()}`")
+                    st.session_state["_pending_schedule_start_date"] = next_start
+                    st.session_state["_pending_schedule_week_count"] = 1
+                    st.session_state["_pending_auto_advance_msg"] = (
+                        f"Next week auto-selected: `{next_start.isoformat()}`"
+                    )
+                    st.rerun()
 
     if "binge_path" in st.session_state and "grids_path" in st.session_state:
         st.markdown("##### Latest files")
