@@ -32,7 +32,11 @@ from binge_schedule.binge_overrides import BingeRowOverride, parse_flexible_time
 from binge_schedule.config_io import load_build_config
 from binge_schedule.models import NikkiColumnHeaders, ShowDef
 from binge_schedule.cursor_state import resolved_cursor_state_path, resolved_nikki_workbook_path
-from binge_schedule.binge_to_grid import normalize_binge_df_columns
+from binge_schedule.binge_to_grid import (
+    normalize_binge_df_columns,
+    read_binge_workbook_sheets,
+    split_binge_df_by_monday,
+)
 from binge_schedule.export_xlsx import export_both, is_verbose_seed_noise
 from binge_schedule.show_swap import apply_show_swap, parse_schedule_anchor
 from binge_schedule.show_resolve import resolve_show
@@ -988,6 +992,14 @@ def _sorted_weeks(weeks: list) -> list:
     return sorted(weeks, key=lambda w: parse_monday(w.monday))
 
 
+def _monday_on_or_after(day: date) -> date:
+    """First calendar Monday on or after ``day`` (weeks anchor on Monday rows)."""
+    wd = day.weekday()
+    if wd == 0:
+        return day
+    return day + timedelta(days=7 - wd)
+
+
 def _weeks_for_unlocked_months(weeks: list, unlocked_months: list[date]) -> list:
     mm = {(d.year, d.month) for d in unlocked_months}
     return [w for w in _sorted_weeks(weeks) if (parse_monday(w.monday).year, parse_monday(w.monday).month) in mm]
@@ -997,17 +1009,35 @@ def _effective_weeks_from_start(all_weeks: list, start_on: date, count: int) -> 
     if not all_weeks:
         return []
     sorted_weeks = _sorted_weeks(all_weeks)
-    start_idx = 0
+    anchor = _monday_on_or_after(start_on)
+    start_idx: Optional[int] = None
     for i, w in enumerate(sorted_weeks):
         mon = parse_monday(w.monday)
-        if mon <= start_on < mon + timedelta(days=7):
+        if mon >= anchor:
             start_idx = i
             break
-        if mon >= start_on:
-            start_idx = i
-            break
+    if start_idx is None:
+        for i, w in enumerate(sorted_weeks):
+            mon = parse_monday(w.monday)
+            if mon <= start_on < mon + timedelta(days=7):
+                start_idx = i
+                break
+    if start_idx is None:
+        return []
     tail = sorted_weeks[start_idx:]
     return tail[: max(1, int(count))]
+
+
+def _next_week_start_after_selection(selected_weeks: list, buildable_weeks: list) -> Optional[date]:
+    """Next buildable Monday after the current selected window."""
+    if not selected_weeks or not buildable_weeks:
+        return None
+    last_selected = max(parse_monday(w.monday) for w in selected_weeks)
+    for w in _sorted_weeks(buildable_weeks):
+        mon = parse_monday(w.monday)
+        if mon > last_selected:
+            return mon
+    return None
 
 
 def _week_floor_from_reference_cutoff(cfg) -> Optional[date]:
@@ -3063,7 +3093,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         min_value=min_day,
         max_value=max_day,
         key="schedule_start_date",
-        help="First calendar day to anchor this run (the app uses the containing Monday week).",
+        help="First calendar week to build: schedules start at the Monday on or after this date.",
     )
     all_from_start = _effective_weeks_from_start(buildable_weeks, start_date, len(buildable_weeks))
     if not all_from_start:
@@ -4133,6 +4163,22 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
             station_kw: Optional[List[str]] = None
             if stations_input.strip():
                 station_kw = [x.strip() for x in stations_input.split(",") if x.strip()]
+            bootstrap_prev_week_df: Optional[pd.DataFrame] = None
+            prev_binge_path = st.session_state.get("binge_path")
+            if prev_binge_path and selected_weeks:
+                prev_path = Path(str(prev_binge_path))
+                if prev_path.is_file():
+                    first_mon = parse_monday(selected_weeks[0].monday)
+                    prior_mon = first_mon - timedelta(days=7)
+                    try:
+                        prior_sheets = read_binge_workbook_sheets(prev_path)
+                        for _name, sdf in prior_sheets.items():
+                            by_mon = split_binge_df_by_monday(sdf)
+                            if prior_mon in by_mon:
+                                bootstrap_prev_week_df = by_mon[prior_mon]
+                                break
+                    except Exception:
+                        bootstrap_prev_week_df = None
             try:
                 with st.spinner("Working…"):
                     binge_path, grids_path, ovw, seeded = export_both(
@@ -4159,6 +4205,7 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                             ),
                         },
                         export_stations=station_kw,
+                        bootstrap_prev_week_df=bootstrap_prev_week_df,
                     )
             except Exception as e:
                 st.error(str(e))
@@ -4198,6 +4245,11 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
                 )
                 for y, m in built_months:
                     _record_completed_month(cfg_path, date(y, m, 1))
+                next_start = _next_week_start_after_selection(selected_weeks, buildable_weeks)
+                if next_start is not None:
+                    st.session_state["schedule_start_date"] = next_start
+                    st.session_state["schedule_week_count"] = 1
+                    st.info(f"Next week auto-selected: `{next_start.isoformat()}`")
 
     if "binge_path" in st.session_state and "grids_path" in st.session_state:
         st.markdown("##### Latest files")

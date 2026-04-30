@@ -703,6 +703,7 @@ def export_both(
     binge_row_overrides: Optional[list[BingeRowOverride]] = None,
     binge_ui_notes: Optional[dict[str, str]] = None,
     export_stations: Optional[Sequence[str]] = None,
+    bootstrap_prev_week_df: Optional[pd.DataFrame] = None,
 ) -> tuple[Path, Path, list[str], list[str]]:
     """Write **BINGE.xlsx** (full episode rows from Nikki) and **BINGE GRIDS.xlsx** (weekly strip layout).
 
@@ -720,7 +721,17 @@ def export_both(
     week_list = list(weeks if weeks is not None else cfg.weeks)
     if not week_list:
         raise ValueError("No weeks to export: pass ``weeks=`` or add entries under ``weeks:`` in config.")
-    warm = _cursor_warmup_week_if_needed(week_list, cfg.weeks)
+    has_bootstrap_prev = bootstrap_prev_week_df is not None and not bootstrap_prev_week_df.empty
+    sync_mondays = {str(x).strip() for x in (cfg.reference_binge_sync_cursor_weeks or []) if str(x).strip()}
+    warm = None if has_bootstrap_prev else _cursor_warmup_week_if_needed(week_list, cfg.weeks)
+    # If we can align cursors directly from the reference week for this run, skip warm-up to avoid
+    # re-simulating (and potentially double-advancing) a week the user already built.
+    first_req = min(week_list, key=lambda w: parse_monday(w.monday))
+    if warm is not None and first_req.monday in sync_mondays:
+        first_ref_df = load_reference_week_dataframe(cfg, parse_monday(first_req.monday))
+        if first_ref_df is not None and not first_ref_df.empty:
+            warm = None
+
     ensure_grids_workbooks_for_weeks(([warm] if warm else []) + week_list)
     seed_messages = seed_grids_from_prior_month(week_list, cfg.weeks)
     seed_messages.extend(sync_straddle_weeks_to_canonical_grids_file(week_list))
@@ -731,19 +742,50 @@ def export_both(
     week_by_label: dict[str, WeekDef] = {}
     grid_raw_by_label: dict[str, list[list[Optional[str]]]] = {}
 
-    sync_mondays = {str(x).strip() for x in (cfg.reference_binge_sync_cursor_weeks or []) if str(x).strip()}
-
     to_process: list[tuple[WeekDef, bool]] = []
     if warm:
         to_process.append((warm, True))
     for wk in sorted(week_list, key=lambda w: parse_monday(w.monday)):
         to_process.append((wk, False))
 
+    first_requested_monday = parse_monday(min(week_list, key=lambda w: parse_monday(w.monday)).monday)
     prev_merged_df: Optional[pd.DataFrame] = None
+    bootstrapped_cursor_sync_done = False
 
     for wk, warmup_only in to_process:
         mon = parse_monday(wk.monday)
-        if wk.monday in sync_mondays:
+        prev_for_week = prev_merged_df
+        if (
+            not warmup_only
+            and mon == first_requested_monday
+            and bootstrap_prev_week_df is not None
+            and not bootstrap_prev_week_df.empty
+        ):
+            prev_for_week = normalize_binge_df_columns(bootstrap_prev_week_df.copy())
+        if prev_for_week is None and not warmup_only:
+            # Fallback for trimmed schedules: seed prior-week overnight source from reference BINGE,
+            # so Monday 0:00–4:00 can still replay Sunday late fringe.
+            prev_ref_df = load_reference_week_dataframe(cfg, mon - timedelta(days=7))
+            if prev_ref_df is not None and not prev_ref_df.empty:
+                prev_for_week = normalize_binge_df_columns(prev_ref_df.copy())
+        if (
+            not warmup_only
+            and mon == first_requested_monday
+            and prev_merged_df is None
+            and prev_for_week is not None
+            and not prev_for_week.empty
+            and not bootstrapped_cursor_sync_done
+        ):
+            # Bring all show cursors forward from the prior completed week when building
+            # an isolated week, so daytime starts and overnight carryover both align.
+            reconcile_catalog_from_binge_dataframe(cfg, cat, prev_for_week)
+            bootstrapped_cursor_sync_done = True
+        skip_reference_cursor_sync = (
+            has_bootstrap_prev
+            and not warmup_only
+            and mon == first_requested_monday
+        )
+        if wk.monday in sync_mondays and not skip_reference_cursor_sync:
             wdf = load_reference_week_dataframe(cfg, mon)
             if wdf is not None:
                 seed_messages.extend(
@@ -763,11 +805,11 @@ def export_both(
             grid_raw,
             wk.monday,
             episode_actions=episode_actions,
-            prev_completed_week_binge_df=prev_merged_df,
+            prev_completed_week_binge_df=prev_for_week,
         )
         df_norm = normalize_binge_df_columns(binge_rows_to_dataframe(rows))
         merged_df, _literal_notes = merge_literal_reference_binge_days(cfg, mon, df_norm)
-        merged_df = apply_overnight_repeats_with_prev(cfg, cat, merged_df, prev_merged_df, mon)
+        merged_df = apply_overnight_repeats_with_prev(cfg, cat, merged_df, prev_for_week, mon)
         reconcile_catalog_from_binge_dataframe(cfg, cat, merged_df)
         prev_merged_df = merged_df
         if warmup_only:
