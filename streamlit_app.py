@@ -487,6 +487,16 @@ def _mobile_styles() -> None:
             border-color: #22c55e !important;
             background-color: rgba(34, 197, 94, 0.18) !important;
         }
+        /* Hide Streamlit Cloud / dev “Deploy” link in the top-right toolbar */
+        div[data-testid="stToolbarDeployButton"],
+        .stDeployButton,
+        .stAppDeployButton {
+            display: none !important;
+            visibility: hidden !important;
+            width: 0 !important;
+            height: 0 !important;
+            overflow: hidden !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
