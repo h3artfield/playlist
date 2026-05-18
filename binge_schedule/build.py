@@ -143,6 +143,41 @@ def _literal_episode_name(cell: str) -> str:
     return s
 
 
+def _explicit_episode_for_cell(cat: Catalog, series_key: str, cell: str, display_name: str) -> Optional[Episode]:
+    """Resolve an explicit episode embedded in grid text like ``Show - (CODE Title)``."""
+    raw = str(cell or "").strip()
+    if not raw:
+        return None
+    tail = raw
+    dn = str(display_name or "").strip()
+    if dn and tail.startswith(dn):
+        tail = tail[len(dn) :].strip()
+    tail = tail.lstrip("-–—: ").strip()
+    if tail.startswith("(") and tail.endswith(")"):
+        tail = tail[1:-1].strip()
+    if not tail:
+        return None
+
+    eps = cat.by_show.get(series_key) or []
+    want = " ".join(tail.casefold().split())
+    for ep in eps:
+        code = str(ep.code or "").strip()
+        title = str(ep.title or "").strip()
+        candidates = [
+            code,
+            title,
+            f"{code} {title}".strip(),
+            f"{code} - {title}".strip(),
+        ]
+        if any(" ".join(c.casefold().split()) == want for c in candidates if c):
+            return ep
+    for ep in eps:
+        code = str(ep.code or "").strip().casefold()
+        if code and want.startswith(code):
+            return ep
+    return None
+
+
 def build_catalog(cfg: BuildConfig) -> Catalog:
     """Load each series’ episode list from the content workbook.
 
@@ -340,6 +375,7 @@ def rows_for_week(
             wd = d.weekday()
             brm = int(getattr(sd, "binge_row_minutes", 30) or 30)
             want_slots = brm // 30 if brm > 30 and brm % 30 == 0 else 0
+            explicit_ep = _explicit_episode_for_cell(cat, key, seg.cell_text, sd.display_name)
 
             prior_day = d - timedelta(days=1)
             if (
@@ -379,7 +415,7 @@ def rows_for_week(
 
             if want_slots > 0 and n_slots == want_slots:
                 slot0 = seg.start_slot
-                ep = _episode_for_slot(
+                ep = explicit_ep or _episode_for_slot(
                     cfg,
                     cat,
                     key,
@@ -408,7 +444,7 @@ def rows_for_week(
                     slot = seg.start_slot + k
                     st_dt = combine_date_time(d, slot_clock_to_time(slot))
                     fin_dt = st_dt + timedelta(minutes=30)
-                    ep = _episode_for_slot(
+                    ep = explicit_ep or _episode_for_slot(
                         cfg,
                         cat,
                         key,

@@ -25,19 +25,20 @@ from typing import Any, List, Optional
 
 import pandas as pd
 import streamlit as st
+import yaml
 
 from binge_schedule import nikki
 from binge_schedule.archive_normalize import normalize_episodes_for_archive
 from binge_schedule.binge_overrides import BingeRowOverride, parse_flexible_time
 from binge_schedule.config_io import load_build_config
-from binge_schedule.models import NikkiColumnHeaders, ShowDef
+from binge_schedule.models import NikkiColumnHeaders, ShowDef, WeekDef
 from binge_schedule.cursor_state import resolved_cursor_state_path, resolved_nikki_workbook_path
 from binge_schedule.binge_to_grid import (
     normalize_binge_df_columns,
     read_binge_workbook_sheets,
     split_binge_df_by_monday,
 )
-from binge_schedule.export_xlsx import export_both, is_verbose_seed_noise
+from binge_schedule.export_xlsx import export_both, is_verbose_seed_noise, sheet_label
 from binge_schedule.show_swap import apply_show_swap, parse_schedule_anchor
 from binge_schedule.show_resolve import resolve_show
 from binge_schedule.grid import (
@@ -85,23 +86,72 @@ def _desktop_download_meta() -> dict[str, str]:
     }
 
 
+def _fresh_blank_schedule_path() -> Path:
+    return Path("config") / "blank_schedule.yaml"
+
+
+def _write_fresh_blank_schedule_config(source_cfg_path: Path) -> Path:
+    """Create a fresh no-weeks base schedule for the Blank Schedule builder."""
+    out_path = _fresh_blank_schedule_path()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        raw = yaml.safe_load(source_cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        raw = None
+    if not isinstance(raw, dict):
+        raw = {}
+    blank = dict(raw)
+    blank.setdefault("gracenote_binge_id", 0)
+    blank.setdefault("nikki_workbook", "../data/2024 Nikki Spreadsheets.xlsx")
+    blank.setdefault("timezone_note", "local")
+    blank.setdefault("wrap_episodes", True)
+    blank.setdefault("shows", {})
+    blank["weeks"] = []
+    blank["cursor_state_file"] = "episode_cursors_blank_schedule.json"
+    for key in (
+        "reference_binge_file",
+        "reference_binge_sheet",
+        "reference_binge_all_sheets",
+        "reference_binge_sync_cursor_weeks",
+        "reference_binge_literal_copy_before",
+        "save_binge_reference_copy_to",
+        "build_sequence_start",
+    ):
+        blank.pop(key, None)
+    out_path.write_text(
+        yaml.dump(blank, default_flow_style=False, allow_unicode=True, sort_keys=False, width=120),
+        encoding="utf-8",
+    )
+    return out_path
+
+
 def _render_desktop_download_cta() -> None:
-    if _secret_or_env("SCHEDULE_BUILDER_DESKTOP_RUNTIME") == "1":
-        return
-    meta = _desktop_download_meta()
-    if not meta:
-        return
     c1, c2 = st.columns([3, 2], vertical_alignment="center")
     with c1:
-        extra = f" (v{meta['version']})" if meta.get("version") else ""
-        st.caption(f"Install Schedule Builder locally on Windows{extra}.")
+        st.caption("Start from scratch with a fresh weekly template.")
     with c2:
-        if hasattr(st, "link_button"):
-            st.link_button(meta["label"], meta["url"], use_container_width=True, type="primary")
-        else:
-            st.markdown(f"[{meta['label']}]({meta['url']})")
-    if meta.get("notes_url"):
-        st.caption(f"[Release notes]({meta['notes_url']})")
+        if st.button("Blank Schedule", type="primary", use_container_width=True, key="open_blank_schedule_builder"):
+            current = Path(str(st.session_state.get("main_setup_yaml") or _default_config_display()))
+            blank_path = _write_fresh_blank_schedule_config(current)
+            st.session_state["main_setup_yaml"] = blank_path.as_posix()
+            st.session_state[_schedule_origin_mode_key(blank_path)] = "create_new"
+            st.session_state[_MAIN_NAV_PENDING_KEY] = _NAV_BUILD
+            for k in list(st.session_state.keys()):
+                if (
+                    str(k).startswith("create_schedule_")
+                    or str(k).startswith("schedule_origin_mode::")
+                    or str(k) in (
+                        "binge_path",
+                        "grids_path",
+                        "out_dir",
+                        "main_base_schedule_pick",
+                        "main_setup_yaml_custom",
+                    )
+                ):
+                    st.session_state.pop(k, None)
+            st.session_state["main_setup_yaml"] = blank_path.as_posix()
+            st.session_state[_schedule_origin_mode_key(blank_path)] = "create_new"
+            st.rerun()
 
 
 def _available_base_schedule_files() -> list[str]:
@@ -906,6 +956,723 @@ def _month_key(m: date) -> str:
     return f"{m.year:04d}-{m.month:02d}"
 
 
+def _config_repo_root(cfg_path: Path) -> Path:
+    cfg_dir = cfg_path.resolve().parent
+    return cfg_dir.parent if cfg_dir.name.casefold() == "config" else cfg_dir
+
+
+def _station_schedule_data_dir(cfg_path: Path) -> Path:
+    return _config_repo_root(cfg_path) / "data" / "imported" / cfg_path.stem
+
+
+def _yaml_path_relative_to_config(cfg_path: Path, absolute: Path) -> str:
+    cfg_dir = cfg_path.resolve().parent
+    try:
+        rel = absolute.resolve().relative_to(cfg_dir)
+        return rel.as_posix()
+    except ValueError:
+        return str(absolute.resolve()).replace("\\", "/")
+
+
+def _merge_setup_yaml(cfg_path: Path, patch: dict[str, Any]) -> list[str]:
+    """Merge top-level keys into the station base schedule YAML."""
+    try:
+        raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as e:
+        return [f"Could not read base schedule: {e}"]
+    if not isinstance(raw, dict):
+        return ["Invalid base schedule YAML root."]
+    for key, val in patch.items():
+        raw[key] = val
+    text = yaml.dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False, width=120)
+    try:
+        cfg_path.write_text(text, encoding="utf-8")
+    except OSError as e:
+        return [f"Could not save base schedule: {e}"]
+    return [f"Updated `{cfg_path.name}` with imported schedule paths and week list."]
+
+
+def _week_dicts_for_new_schedule(
+    first_monday: date,
+    week_count: int,
+    grids_file_yaml: str,
+) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    mon = first_monday
+    for _ in range(max(1, week_count)):
+        out.append(
+            {
+                "monday": mon.isoformat(),
+                "grids_file": grids_file_yaml,
+                "sheet_name": sheet_label(mon.isoformat()),
+            }
+        )
+        mon += timedelta(days=7)
+    return out
+
+
+def _week_dicts_from_grids_workbook(grids_path: Path, grids_file_yaml: str) -> list[dict[str, str]]:
+    import openpyxl
+
+    weeks: list[dict[str, str]] = []
+    wb = openpyxl.load_workbook(grids_path, read_only=True)
+    try:
+        for sn in wb.sheetnames:
+            if sn.strip().upper() in ("BINGE NOTES", "NOTES"):
+                continue
+            mon = parse_sheet_tab_monday(sn)
+            if mon is None:
+                continue
+            weeks.append(
+                {
+                    "monday": mon.isoformat(),
+                    "grids_file": grids_file_yaml,
+                    "sheet_name": sn.strip(),
+                }
+            )
+    finally:
+        wb.close()
+    weeks.sort(key=lambda w: w["monday"])
+    return weeks
+
+
+_WEEKDAY_LABELS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def _hour_dropdown_options() -> list[tuple[str, int]]:
+    out: list[tuple[str, int]] = []
+    for h in range(24):
+        hh = h % 12 or 12
+        ampm = "AM" if h < 12 else "PM"
+        out.append((f"{hh}:00 {ampm}", h))
+    return out
+
+
+def _new_schedule_template_rows(start_day_idx: int, start_hour: int) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    start_slot = int(start_hour) * 2
+    for n in range(7 * 48):
+        raw_slot = start_slot + n
+        day_offset, slot = divmod(raw_slot, 48)
+        day_idx = (int(start_day_idx) + day_offset) % 7
+        rows.append(
+            {
+                "Day": _WEEKDAY_LABELS[day_idx],
+                "Time": slot_label(slot),
+                "Program": "",
+                "Filled schedule": "",
+                "_day_index": day_idx,
+                "_slot": slot,
+                "_order": n,
+            }
+        )
+    return rows
+
+
+def _available_content_options_for_new_schedule(cfg, cfg_path: Path, nikki_path: Path) -> tuple[list[str], dict[str, str], dict[str, int]]:
+    opts: list[str] = sorted(cfg.shows.keys(), key=lambda k: cfg.shows[k].display_name.casefold())
+    if nikki_path.is_file():
+        tabs = _nikki_workbook_sheet_names(str(nikki_path.resolve()), _nikki_mtime(nikki_path))
+        opts.extend(workbook_tab_option(t) for t in workbook_tabs_not_in_yaml(cfg, tabs))
+        opts.extend(_nikki_movie_catalog_options(nikki_path))
+
+    imported_rows = _load_imported_catalog_rows(cfg_path)
+    imported_names = sorted(
+        {
+            str(r.get("display_name") or r.get("series_title") or "").strip()
+            for r in imported_rows
+            if str(r.get("display_name") or r.get("series_title") or "").strip()
+        },
+        key=str.casefold,
+    )
+    opts.extend(_imported_content_option(x) for x in imported_names)
+
+    option_to_grid_text: dict[str, str] = {}
+    option_duration: dict[str, int] = {}
+    for opt in opts:
+        try:
+            display = _display_name_for_archive_pick(cfg, opt).strip()
+        except Exception:
+            continue
+        if not display:
+            continue
+        sd = _showdef_for_archive_pick(cfg, opt)
+        if sd is not None and sd.kind == "series":
+            mins = max(30, int(getattr(sd, "binge_row_minutes", 30) or 30))
+            eps = _episode_rows_for_archive_pick(cfg, opt, nikki_path)
+            if eps:
+                for ep in eps:
+                    ep_title = str(ep.get("title") or "").strip()
+                    code = str(ep.get("code") or "").strip()
+                    num = _episode_num_text(ep)
+                    suffix = " ".join(x for x in (num, ep_title) if x).strip() or code or "Episode"
+                    label = f"{display} - {suffix}"
+                    if label in option_to_grid_text:
+                        continue
+                    grid_ep = " ".join(x for x in (code, ep_title) if x).strip() or suffix
+                    option_to_grid_text[label] = f"{display} - ({grid_ep})"
+                    option_duration[label] = mins
+                continue
+        if display not in option_to_grid_text:
+            option_to_grid_text[display] = display
+
+    runtime_map = _movie_runtime_minutes(str(cfg_path.resolve()))
+    imported_runtime_by_name: dict[str, int] = {}
+    for r in imported_rows:
+        name = str(r.get("display_name") or r.get("series_title") or "").strip()
+        try:
+            rt = int(r.get("runtime_minutes") or 0)
+        except (TypeError, ValueError):
+            rt = 0
+        if name and rt > 0 and name not in imported_runtime_by_name:
+            imported_runtime_by_name[name] = rt
+
+    for r in imported_rows:
+        content_type = str(r.get("content_type") or "").strip().lower()
+        series = str(r.get("series_title") or "").strip()
+        title = str(r.get("episode_title") or r.get("display_name") or "").strip()
+        if content_type == "series" and series:
+            ep_num = str(r.get("episode_number") or "").strip()
+            suffix = " ".join(x for x in (ep_num, title) if x).strip() or "Episode"
+            label = f"{series} - {suffix}"
+            if label not in option_to_grid_text:
+                option_to_grid_text[label] = f"{series} - ({suffix})"
+                try:
+                    rt = int(r.get("runtime_minutes") or 30)
+                except (TypeError, ValueError):
+                    rt = 30
+                option_duration[label] = max(30, rt)
+
+    display_to_opt: dict[str, str] = {}
+    for opt in opts:
+        try:
+            display = _display_name_for_archive_pick(cfg, opt).strip()
+        except Exception:
+            continue
+        if display and display not in display_to_opt:
+            display_to_opt[display] = opt
+
+    for display, opt in display_to_opt.items():
+        if display not in option_to_grid_text:
+            continue
+        sd = _showdef_for_archive_pick(cfg, opt)
+        mins = 30
+        if sd is not None and sd.kind == "series":
+            mins = int(getattr(sd, "binge_row_minutes", 30) or 30)
+        else:
+            mins = int(_runtime_for_archive_option(cfg, opt, runtime_map) or imported_runtime_by_name.get(display) or 30)
+        option_duration.setdefault(display, max(30, mins))
+
+    option_names = sorted(option_to_grid_text.keys(), key=str.casefold)
+    return option_names, option_to_grid_text, option_duration
+
+
+def _filled_new_schedule_rows(rows: list[dict[str, Any]], duration_by_display: dict[str, int]) -> list[dict[str, Any]]:
+    out = [dict(r) for r in rows]
+    explicit = [str(r.get("Program") or "").strip() for r in out]
+    filled = [""] * len(out)
+    i = 0
+    while i < len(out):
+        title = explicit[i]
+        if not title:
+            i += 1
+            continue
+        slots = max(1, (int(duration_by_display.get(title, 30)) + 29) // 30)
+        for j in range(i, min(len(out), i + slots)):
+            if j != i and explicit[j]:
+                break
+            filled[j] = title
+        i += 1
+    for idx, r in enumerate(out):
+        r["Filled schedule"] = filled[idx]
+    return out
+
+
+def _show_episode_groups_for_new_schedule(content_names: list[str]) -> dict[str, list[str]]:
+    groups: dict[str, list[str]] = {}
+    for name in content_names:
+        show = str(name).split(" - ", 1)[0].strip()
+        if not show:
+            continue
+        groups.setdefault(show, []).append(name)
+    return {k: sorted(v, key=str.casefold) for k, v in sorted(groups.items(), key=lambda kv: kv[0].casefold())}
+
+
+def _next_empty_schedule_slot_key(
+    filled_rows: list[dict[str, Any]],
+    *,
+    after_slot_key: str,
+    slot_options: list[str],
+) -> Optional[str]:
+    filled_by_key = {
+        f"{r['_day_index']}|{r['_slot']}": bool(str(r.get("Filled schedule") or "").strip())
+        for r in filled_rows
+    }
+    try:
+        start_idx = slot_options.index(str(after_slot_key)) + 1
+    except ValueError:
+        start_idx = 0
+    ordered = slot_options[start_idx:] + slot_options[:start_idx]
+    for key in ordered:
+        if not filled_by_key.get(key, False):
+            return key
+    return None
+
+
+def _program_show_name(program: str) -> str:
+    return str(program or "").split(" - ", 1)[0].strip() or "Unlabeled"
+
+
+def _schedule_genre_for_show(cfg, cfg_path: Path, show_name: str) -> str:
+    raw = str(show_name or "").strip()
+    if not raw:
+        return "unlabeled"
+    key, sd = resolve_show(raw, cfg.shows)
+    if sd is not None and key != "literal":
+        return str(getattr(sd, "semantic_group", None) or "").strip().lower() or "unlabeled"
+    imported_rows = _load_imported_catalog_rows(cfg_path)
+    for r in imported_rows:
+        names = {
+            str(r.get("display_name") or "").strip(),
+            str(r.get("series_title") or "").strip(),
+        }
+        if raw in names:
+            return str(r.get("genre") or "").strip().lower() or "unlabeled"
+    return "unlabeled"
+
+
+def _schedule_content_type_for_show(cfg, cfg_path: Path, show_name: str) -> str:
+    raw = str(show_name or "").strip()
+    low = raw.casefold()
+    if not raw:
+        return "Unknown"
+    paid_terms = (
+        "paid programming",
+        "paid program",
+        "infomercial",
+        "ministry",
+        "ministries",
+        "church",
+        "worship",
+        "gospel",
+    )
+    if any(term in low for term in paid_terms):
+        return "Paid programming"
+    key, sd = resolve_show(raw, cfg.shows)
+    if sd is not None and key != "literal":
+        group = str(getattr(sd, "semantic_group", None) or "").strip().casefold()
+        if key == "paid_programming" or "paid" in key.casefold() or group in {"paid", "paid_programming"}:
+            return "Paid programming"
+        if sd.kind == "series":
+            return "Series / show"
+        return "Movie / special"
+    imported_rows = _load_imported_catalog_rows(cfg_path)
+    for r in imported_rows:
+        names = {
+            str(r.get("display_name") or "").strip(),
+            str(r.get("series_title") or "").strip(),
+        }
+        if raw in names:
+            kind = str(r.get("content_type") or "").strip().casefold()
+            genre = str(r.get("genre") or "").strip().casefold()
+            if kind in {"paid", "paid programming", "infomercial"} or any(term in genre for term in paid_terms):
+                return "Paid programming"
+            if kind == "series":
+                return "Series / show"
+            if kind == "movie":
+                return "Movie / special"
+    if re.search(r"\((19|20)\d{2}\)", raw) or re.search(r"\b(19|20)\d{2}\b", raw):
+        return "Movie / special"
+    return "Unknown"
+
+
+def _schedule_report_frames(
+    cfg,
+    cfg_path: Path,
+    filled_rows: list[dict[str, Any]],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    total_slots = len(filled_rows)
+    filled = [r for r in filled_rows if str(r.get("Filled schedule") or "").strip()]
+    show_counts: dict[str, int] = {}
+    genre_counts: dict[str, int] = {}
+    type_counts: dict[str, int] = {}
+    for r in filled:
+        show = _program_show_name(str(r.get("Filled schedule") or ""))
+        show_counts[show] = show_counts.get(show, 0) + 1
+        genre = _schedule_genre_for_show(cfg, cfg_path, show)
+        genre_counts[genre] = genre_counts.get(genre, 0) + 1
+        ctype = _schedule_content_type_for_show(cfg, cfg_path, show)
+        type_counts[ctype] = type_counts.get(ctype, 0) + 1
+
+    def pct(n: int) -> str:
+        return f"{(n / total_slots * 100.0):.1f}%" if total_slots else "0.0%"
+
+    show_df = pd.DataFrame(
+        [
+            {
+                "Show": show,
+                "Half-hours": count,
+                "Hours": round(count * 0.5, 1),
+                "% of schedule": pct(count),
+            }
+            for show, count in sorted(show_counts.items(), key=lambda kv: (-kv[1], kv[0].casefold()))
+        ]
+    )
+    genre_df = pd.DataFrame(
+        [
+            {
+                "Genre": genre,
+                "Half-hours": count,
+                "Hours": round(count * 0.5, 1),
+                "% of schedule": pct(count),
+            }
+            for genre, count in sorted(genre_counts.items(), key=lambda kv: (-kv[1], kv[0].casefold()))
+        ]
+    )
+    type_df = pd.DataFrame(
+        [
+            {
+                "Content type": ctype,
+                "Half-hours": count,
+                "Hours": round(count * 0.5, 1),
+                "% of schedule": pct(count),
+            }
+            for ctype, count in sorted(type_counts.items(), key=lambda kv: (-kv[1], kv[0].casefold()))
+        ]
+    )
+    summary = {
+        "total_slots": total_slots,
+        "filled_slots": len(filled),
+        "empty_slots": max(0, total_slots - len(filled)),
+        "coverage_pct": pct(len(filled)),
+        "total_hours": round(total_slots * 0.5, 1),
+        "filled_hours": round(len(filled) * 0.5, 1),
+    }
+    return show_df, genre_df, type_df, summary
+
+
+def _render_schedule_report(
+    cfg,
+    cfg_path: Path,
+    filled_rows: list[dict[str, Any]],
+    *,
+    title: str = "Schedule report",
+) -> None:
+    show_df, genre_df, type_df, summary = _schedule_report_frames(cfg, cfg_path, filled_rows)
+    st.markdown(f"###### {title}")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Filled", f"{summary['filled_hours']}h", summary["coverage_pct"])
+    c2.metric("Empty", f"{summary['empty_slots']} half-hours")
+    c3.metric("Total", f"{summary['total_hours']}h")
+    if not show_df.empty:
+        st.markdown("**Show share**")
+        st.dataframe(show_df, use_container_width=True, hide_index=True, height=min(280, 68 + 35 * len(show_df)))
+    if not type_df.empty:
+        st.markdown("**Content type share**")
+        st.dataframe(type_df, use_container_width=True, hide_index=True, height=min(220, 68 + 35 * len(type_df)))
+    if not genre_df.empty:
+        st.markdown("**Genre share**")
+        st.dataframe(genre_df, use_container_width=True, hide_index=True, height=min(240, 68 + 35 * len(genre_df)))
+
+
+def _write_new_schedule_template_to_grids(
+    grids_path: Path,
+    week_defs: list[WeekDef],
+    filled_rows: list[dict[str, Any]],
+    grid_text_by_program: dict[str, str],
+) -> None:
+    import openpyxl
+
+    ensure_grids_workbooks_for_weeks(week_defs)
+    wb = openpyxl.load_workbook(grids_path)
+    try:
+        filled_by_cell: dict[tuple[int, int], str] = {}
+        for row in filled_rows:
+            title = str(row.get("Filled schedule") or "").strip()
+            if not title:
+                continue
+            day_idx = int(row["_day_index"])
+            slot = int(row["_slot"])
+            filled_by_cell[(slot, day_idx)] = grid_text_by_program.get(title, title)
+
+        for wk in week_defs:
+            ws = wb[wk.sheet_name] if wk.sheet_name in wb.sheetnames else wb.create_sheet(wk.sheet_name)
+            for slot in range(48):
+                for day_idx in range(7):
+                    ws.cell(row=5 + slot, column=2 + day_idx, value=filled_by_cell.get((slot, day_idx)))
+        wb.save(grids_path)
+    finally:
+        wb.close()
+
+
+def _schedule_origin_mode_key(cfg_path: Path) -> str:
+    return f"schedule_origin_mode::{cfg_path.resolve()}"
+
+
+def _needs_schedule_origin_gate(cfg, cfg_path: Path) -> bool:
+    return not bool(cfg.weeks)
+
+
+def _render_schedule_origin_gate(cfg, cfg_path: Path) -> bool:
+    """First-time setup for stations with no weeks in YAML. Returns True when build UI may continue."""
+    mode_key = _schedule_origin_mode_key(cfg_path)
+    st.markdown("##### New station setup")
+    st.caption(
+        "Choose how to start. **Import existing** loads BINGE + GRIDS you already have. "
+        "**Create new** sets up blank week tabs in a grids workbook so you can build from scratch."
+    )
+    origin = st.radio(
+        "Starting point",
+        ("Create new schedule", "Import existing schedule"),
+        horizontal=True,
+        key="schedule_origin_radio",
+        label_visibility="collapsed",
+    )
+    if origin == "Create new schedule":
+        st.session_state[mode_key] = "create_new"
+    else:
+        st.session_state[mode_key] = "import_existing"
+
+    data_dir = _station_schedule_data_dir(cfg_path)
+    rel_grids = _yaml_path_relative_to_config(cfg_path, data_dir / "BINGE GRIDS.xlsx")
+    rel_binge = _yaml_path_relative_to_config(cfg_path, data_dir / "BINGE.xlsx")
+
+    if st.session_state[mode_key] == "import_existing":
+        st.markdown("Upload your station’s current **BINGE.xlsx** and **BINGE GRIDS.xlsx**.")
+        up_binge = st.file_uploader("BINGE workbook", type=["xlsx"], key="import_schedule_binge")
+        up_grids = st.file_uploader("BINGE GRIDS workbook", type=["xlsx"], key="import_schedule_grids")
+        if st.button("Import schedule", type="primary", key="import_schedule_submit"):
+            if up_binge is None or up_grids is None:
+                st.error("Upload both workbooks before importing.")
+                return False
+            data_dir.mkdir(parents=True, exist_ok=True)
+            binge_path = data_dir / "BINGE.xlsx"
+            grids_path = data_dir / "BINGE GRIDS.xlsx"
+            binge_path.write_bytes(up_binge.getvalue())
+            grids_path.write_bytes(up_grids.getvalue())
+            week_dicts = _week_dicts_from_grids_workbook(grids_path, rel_grids)
+            if not week_dicts:
+                st.error(
+                    "No week tabs found in the GRIDS file. Tabs should look like `5-4-2026` or `2026-05-04`."
+                )
+                return False
+            msgs = _merge_setup_yaml(
+                cfg_path,
+                {
+                    "weeks": week_dicts,
+                    "reference_binge_file": rel_binge,
+                    "reference_binge_all_sheets": True,
+                },
+            )
+            for m in msgs:
+                st.success(m)
+            st.session_state["binge_path"] = binge_path
+            st.session_state["grids_path"] = grids_path
+            st.session_state["out_dir"] = data_dir
+            st.rerun()
+        return False
+
+    st.markdown("Build the starter weekly template.")
+    st.caption(
+        "Pick when the station week begins, then assign programs in the half-hour grid. "
+        "Longer programs preview as filled time below the editor."
+    )
+    today = date.today()
+    default_mon = today - timedelta(days=today.weekday())
+    first_mon = st.date_input(
+        "First calendar week (Monday)",
+        value=default_mon,
+        key="create_schedule_first_monday",
+        help="This anchors the first Excel week tab. The schedule can start on any weekday/hour below.",
+    )
+    day_col, hour_col = st.columns(2)
+    with day_col:
+        first_day_name = st.selectbox(
+            "First day of the week",
+            _WEEKDAY_LABELS,
+            index=0,
+            key="create_schedule_first_day",
+        )
+    hour_opts = _hour_dropdown_options()
+    hour_labels = [x[0] for x in hour_opts]
+    with hour_col:
+        first_hour_label = st.selectbox(
+            "First hour",
+            hour_labels,
+            index=0,
+            key="create_schedule_first_hour",
+        )
+    first_day_idx = _WEEKDAY_LABELS.index(str(first_day_name))
+    first_hour = dict(hour_opts)[str(first_hour_label)]
+    week_count = int(
+        st.number_input("Number of weeks", min_value=1, max_value=52, value=4, step=1, key="create_schedule_week_count")
+    )
+    default_grids_name = f"{first_mon.strftime('%B %Y').upper()} BINGE GRIDS.xlsx"
+    grids_name = st.text_input(
+        "Grids workbook file name",
+        value=default_grids_name,
+        key="create_schedule_grids_name",
+        help="Saved under data/imported/<your config name>/",
+    ).strip() or default_grids_name
+    grids_abs = data_dir / grids_name
+    rel_grids_create = _yaml_path_relative_to_config(cfg_path, grids_abs)
+
+    content_names, grid_text_by_program, duration_by_display = _available_content_options_for_new_schedule(
+        cfg, cfg_path, nikki_path=resolved_nikki_workbook_path(cfg)
+    )
+    if content_names:
+        st.markdown("###### Weekly schedule template")
+        st.caption(
+            "Pick the half-hour where the program starts, choose the show, then choose the indexed episode on the right. "
+            "The preview carries the selection through its duration."
+        )
+        base_rows = _new_schedule_template_rows(first_day_idx, first_hour)
+        assignment_key = f"create_schedule_assignments_{first_day_idx}_{first_hour}"
+        if assignment_key not in st.session_state or not isinstance(st.session_state.get(assignment_key), dict):
+            st.session_state[assignment_key] = {}
+        assignments: dict[str, str] = st.session_state[assignment_key]
+        row_by_slot_key = {
+            f"{r['_day_index']}|{r['_slot']}": r
+            for r in base_rows
+        }
+        slot_options = list(row_by_slot_key.keys())
+        slot_label_by_key = {
+            k: f"{v['Day']} {v['Time']}"
+            for k, v in row_by_slot_key.items()
+        }
+        pending_slot_key = st.session_state.pop("create_schedule_next_slot", None)
+        if pending_slot_key in slot_options:
+            st.session_state["create_schedule_pick_slot"] = pending_slot_key
+        show_groups = _show_episode_groups_for_new_schedule(content_names)
+        slot_col, show_col, episode_col = st.columns([1.2, 1.4, 2.4])
+        with slot_col:
+            slot_key = st.selectbox(
+                "Start time",
+                slot_options,
+                format_func=lambda k: slot_label_by_key.get(str(k), str(k)),
+                key="create_schedule_pick_slot",
+            )
+        with show_col:
+            show_name = st.selectbox(
+                "Show",
+                list(show_groups.keys()),
+                key="create_schedule_pick_show",
+            )
+        episode_options = show_groups.get(str(show_name), [])
+        prev_episode_key = "create_schedule_pick_episode_prev_show"
+        if st.session_state.get(prev_episode_key) != show_name:
+            for k in list(st.session_state.keys()):
+                if str(k).startswith("create_schedule_pick_episode_"):
+                    st.session_state.pop(k, None)
+            st.session_state[prev_episode_key] = show_name
+        with episode_col:
+            episode_choice = st.selectbox(
+                "Episode",
+                episode_options,
+                key=f"create_schedule_pick_episode_{show_name}",
+                format_func=lambda v: str(v).split(" - ", 1)[1] if " - " in str(v) else str(v),
+            )
+        c_apply, c_clear, c_clear_all = st.columns(3)
+        with c_apply:
+            if st.button("Add to template", type="primary", use_container_width=True, key="create_schedule_add_assignment"):
+                assignments[str(slot_key)] = str(episode_choice)
+                st.session_state[assignment_key] = assignments
+                st.session_state.pop("create_schedule_confirm_incomplete", None)
+                next_rows = []
+                for r in base_rows:
+                    rr = dict(r)
+                    rr["Program"] = assignments.get(f"{r['_day_index']}|{r['_slot']}", "")
+                    next_rows.append(rr)
+                next_filled_rows = _filled_new_schedule_rows(next_rows, duration_by_display)
+                next_slot = _next_empty_schedule_slot_key(
+                    next_filled_rows,
+                    after_slot_key=str(slot_key),
+                    slot_options=slot_options,
+                )
+                if next_slot is not None:
+                    st.session_state["create_schedule_next_slot"] = next_slot
+                st.rerun()
+        with c_clear:
+            if st.button("Clear this slot", use_container_width=True, key="create_schedule_clear_assignment"):
+                assignments.pop(str(slot_key), None)
+                st.session_state[assignment_key] = assignments
+                st.session_state.pop("create_schedule_confirm_incomplete", None)
+                st.rerun()
+        with c_clear_all:
+            if st.button("Clear all", use_container_width=True, key="create_schedule_clear_all_assignments"):
+                st.session_state[assignment_key] = {}
+                st.session_state.pop("create_schedule_confirm_incomplete", None)
+                st.rerun()
+
+        edited_rows = []
+        for r in base_rows:
+            rr = dict(r)
+            rr["Program"] = assignments.get(f"{r['_day_index']}|{r['_slot']}", "")
+            edited_rows.append(rr)
+        filled_rows = _filled_new_schedule_rows(edited_rows, duration_by_display)
+        filled_count = sum(1 for r in filled_rows if str(r.get("Filled schedule") or "").strip())
+        preview_df = pd.DataFrame(filled_rows)[["Day", "Time", "Program", "Filled schedule"]]
+        st.dataframe(
+            preview_df,
+            use_container_width=True,
+            hide_index=True,
+            height=420,
+        )
+        empty_count = max(0, len(filled_rows) - filled_count)
+        st.caption(f"Filled preview: **{filled_count}** half-hour slot(s). Empty: **{empty_count}**.")
+        if filled_count:
+            with st.expander("Schedule composition preview", expanded=False):
+                _render_schedule_report(cfg, cfg_path, filled_rows, title="Preview report")
+    else:
+        filled_rows = _new_schedule_template_rows(first_day_idx, first_hour)
+        st.warning(
+            "No available content was found yet. You can still create the blank week tabs, then upload/add content "
+            "from **Available Content** before filling the schedule."
+        )
+
+    if st.button("Generate schedule", type="primary", key="create_schedule_submit"):
+        if not isinstance(first_mon, date):
+            st.error("Pick a valid first Monday.")
+            return False
+        filled_count_for_submit = sum(1 for r in filled_rows if str(r.get("Filled schedule") or "").strip())
+        empty_count_for_submit = max(0, len(filled_rows) - filled_count_for_submit)
+        if empty_count_for_submit:
+            if not st.session_state.get("create_schedule_confirm_incomplete"):
+                st.session_state["create_schedule_confirm_incomplete"] = True
+                st.warning(
+                    f"Your schedule still has **{empty_count_for_submit}** empty half-hour slot(s). "
+                    "Fill the remaining times, or click **Generate schedule** again to continue anyway."
+                )
+                return False
+            st.warning(
+                f"Generated with **{empty_count_for_submit}** empty half-hour slot(s). "
+                "You can keep editing and generate again when ready."
+            )
+        st.session_state.pop("create_schedule_confirm_incomplete", None)
+        mon = first_mon - timedelta(days=first_mon.weekday())
+        week_dicts = _week_dicts_for_new_schedule(mon, week_count, rel_grids_create)
+        week_defs = [
+            WeekDef(monday=w["monday"], grids_file=str(grids_abs.resolve()), sheet_name=w["sheet_name"])
+            for w in week_dicts
+        ]
+        data_dir.mkdir(parents=True, exist_ok=True)
+        _write_new_schedule_template_to_grids(grids_abs, week_defs, filled_rows, grid_text_by_program)
+        patch: dict[str, Any] = {"weeks": week_dicts}
+        if not cfg.shows:
+            st.warning(
+                "Your base schedule has no **shows** yet — copy show entries from an existing station YAML "
+                "or add them before running **Create Schedule**."
+            )
+        msgs = _merge_setup_yaml(cfg_path, patch)
+        for m in msgs:
+            st.success(m)
+        st.info(f"Created grids workbook: `{grids_abs}`")
+        st.session_state["create_schedule_last_report"] = filled_rows
+        _render_schedule_report(cfg, cfg_path, filled_rows, title="Generated schedule report")
+        st.rerun()
+    return False
+
+
 def _build_state_path(cfg_path: Path) -> Path:
     return cfg_path.resolve().parent / "schedule_build_state.json"
 
@@ -1502,6 +2269,18 @@ def _normalize_key(text: Any) -> str:
     return v
 
 
+def _clean_import_text(v: Any) -> str:
+    if v is None:
+        return ""
+    try:
+        if pd.isna(v):
+            return ""
+    except Exception:
+        pass
+    t = str(v).strip()
+    return "" if t.lower() == "nan" else t
+
+
 def _normalize_episode_number(value: Any) -> str:
     raw = _normalize_key(value)
     if not raw:
@@ -1547,15 +2326,22 @@ def _import_aliases() -> dict[str, set[str]]:
     return {
         "series_title": {
             "series title",
+            "series name",
             "series",
             "artist/series",
             "show",
+            "show title",
             "program",
+            "program title",
+            "program name",
         },
         "title": {
             "title",
             "episode",
             "episode title",
+            "episode name",
+            "asset title",
+            "movie title",
             "title (internal)",
             "sort title",
         },
@@ -1591,6 +2377,8 @@ def _import_aliases() -> dict[str, set[str]]:
             "trt",
             "rt",
             "duration",
+            "running time",
+            "length",
         },
         "production_company": {
             "production company",
@@ -1605,6 +2393,13 @@ def _import_aliases() -> dict[str, set[str]]:
         },
         "copyright": {
             "copyright",
+        },
+        "content_type": {
+            "content type",
+            "type",
+            "format",
+            "asset type",
+            "program type",
         },
     }
 
@@ -1628,6 +2423,40 @@ def _normalize_import_dataframe(df_raw: pd.DataFrame, sheet_name: str) -> pd.Dat
     data.columns = header_vals
     data = data.dropna(how="all")
     return data
+
+
+def _detect_import_header_row(df_raw: pd.DataFrame) -> int:
+    aliases = _import_aliases()
+    alias_flat = {a for vals in aliases.values() for a in vals}
+    best_row = 0
+    best_score = -1
+    for hdr in range(min(10, len(df_raw))):
+        vals = [_normalize_key(v) for v in list(df_raw.iloc[hdr].values)]
+        score = sum(1 for v in vals if v in alias_flat)
+        non_empty = sum(1 for v in vals if v)
+        if score > best_score or (score == best_score and non_empty > 0 and hdr == 0):
+            best_score = score
+            best_row = hdr
+    return best_row
+
+
+def _dataframe_from_header_row(df_raw: pd.DataFrame, header_row: int) -> pd.DataFrame:
+    header_vals = [
+        _clean_import_text(v) if _clean_import_text(v) else f"col_{i}"
+        for i, v in enumerate(list(df_raw.iloc[int(header_row)].values))
+    ]
+    data = df_raw.iloc[int(header_row) + 1 :].copy()
+    data.columns = header_vals
+    return data.dropna(how="all")
+
+
+def _guess_import_column(columns: list[str], canon: str) -> str:
+    aliases = _import_aliases()
+    vals = aliases.get(canon, set())
+    for c in columns:
+        if _normalize_key(c) in vals:
+            return c
+    return ""
 
 
 def _runtime_minutes_from_cell(v: Any) -> Optional[int]:
@@ -1670,17 +2499,6 @@ def _runtime_minutes_from_cell(v: Any) -> Optional[int]:
 
 
 def _import_rows_from_dataframe(df: pd.DataFrame, sheet_name: str, source_name: str) -> list[dict[str, Any]]:
-    def _clean_text(v: Any) -> str:
-        if v is None:
-            return ""
-        try:
-            if pd.isna(v):
-                return ""
-        except Exception:
-            pass
-        t = str(v).strip()
-        return "" if t.lower() == "nan" else t
-
     aliases = _import_aliases()
     col_map: dict[str, str] = {}
     for c in df.columns:
@@ -1690,9 +2508,9 @@ def _import_rows_from_dataframe(df: pd.DataFrame, sheet_name: str, source_name: 
                 col_map[canon] = str(c)
     out: list[dict[str, Any]] = []
     for _, r in df.iterrows():
-        series_title = _clean_text(r.get(col_map.get("series_title", ""), ""))
-        title = _clean_text(r.get(col_map.get("title", ""), ""))
-        ep_num = _clean_text(r.get(col_map.get("episode_number", ""), ""))
+        series_title = _clean_import_text(r.get(col_map.get("series_title", ""), ""))
+        title = _clean_import_text(r.get(col_map.get("title", ""), ""))
+        ep_num = _clean_import_text(r.get(col_map.get("episode_number", ""), ""))
         if not series_title and ep_num:
             series_title = sheet_name.strip()
         is_series = bool(series_title and (ep_num or title))
@@ -1713,18 +2531,90 @@ def _import_rows_from_dataframe(df: pd.DataFrame, sheet_name: str, source_name: 
             "series_title": series_title,
             "episode_number": ep_num,
             "episode_title": title if is_series else "",
-            "genre": _clean_text(r.get(col_map.get("genre", ""), "")).split(",")[0].strip().lower(),
+            "genre": _clean_import_text(r.get(col_map.get("genre", ""), "")).split(",")[0].strip().lower(),
             "runtime_minutes": int(rt) if rt is not None else None,
             "original_airdate": air_iso,
-            "production_company": _clean_text(r.get(col_map.get("production_company", ""), "")),
-            "copyright": _clean_text(r.get(col_map.get("copyright", ""), "")),
-            "synopsis_short": _clean_text(r.get(col_map.get("synopsis_short", ""), "")),
-            "synopsis_long": _clean_text(r.get(col_map.get("synopsis_long", ""), "")),
+            "production_company": _clean_import_text(r.get(col_map.get("production_company", ""), "")),
+            "copyright": _clean_import_text(r.get(col_map.get("copyright", ""), "")),
+            "synopsis_short": _clean_import_text(r.get(col_map.get("synopsis_short", ""), "")),
+            "synopsis_long": _clean_import_text(r.get(col_map.get("synopsis_long", ""), "")),
             "source_sheet": sheet_name,
             "source_file": source_name,
         }
         out.append(row)
     return out
+
+
+def _import_rows_from_dataframe_with_mapping(
+    df: pd.DataFrame,
+    *,
+    sheet_name: str,
+    source_name: str,
+    mapping: dict[str, str],
+    default_content_type: str,
+    default_series_title: str,
+) -> list[dict[str, Any]]:
+    def cell(row: pd.Series, canon: str) -> Any:
+        col = mapping.get(canon, "")
+        if not col:
+            return None
+        return row.get(col, None)
+
+    out: list[dict[str, Any]] = []
+    default_series_title = default_series_title.strip()
+    for _, r in df.iterrows():
+        series_title = _clean_import_text(cell(r, "series_title")) or default_series_title
+        title = _clean_import_text(cell(r, "title"))
+        ep_num = _clean_import_text(cell(r, "episode_number"))
+        raw_type = _clean_import_text(cell(r, "content_type")).lower()
+        if default_content_type == "Series":
+            is_series = True
+        elif default_content_type == "Movies / specials":
+            is_series = False
+        elif raw_type:
+            is_series = raw_type not in {"movie", "movies", "special", "specials", "film", "feature"}
+        else:
+            is_series = bool(series_title and (ep_num or title))
+        if is_series and not series_title:
+            series_title = sheet_name.strip()
+        display = series_title if is_series else title
+        if not display:
+            continue
+        rt = _runtime_minutes_from_cell(cell(r, "runtime"))
+        air_raw = cell(r, "original_airdate")
+        air_iso = ""
+        try:
+            if pd.notna(air_raw):
+                air_iso = pd.to_datetime(air_raw).date().isoformat()
+        except Exception:
+            air_iso = _clean_import_text(air_raw)
+        out.append(
+            {
+                "content_type": "series" if is_series else "movie",
+                "display_name": display,
+                "series_title": series_title if is_series else "",
+                "episode_number": ep_num if is_series else "",
+                "episode_title": title if is_series else "",
+                "genre": _clean_import_text(cell(r, "genre")).split(",")[0].strip().lower(),
+                "runtime_minutes": int(rt) if rt is not None else None,
+                "original_airdate": air_iso,
+                "production_company": _clean_import_text(cell(r, "production_company")),
+                "copyright": _clean_import_text(cell(r, "copyright")),
+                "synopsis_short": _clean_import_text(cell(r, "synopsis_short")),
+                "synopsis_long": _clean_import_text(cell(r, "synopsis_long")),
+                "source_sheet": sheet_name,
+                "source_file": source_name,
+            }
+        )
+    return out
+
+
+def _uploaded_content_raw_sheets(name: str, payload: bytes) -> dict[str, pd.DataFrame]:
+    lname = str(name or "").lower()
+    if lname.endswith(".csv"):
+        return {"CSV": pd.read_csv(io.BytesIO(payload), header=None)}
+    xls = pd.ExcelFile(io.BytesIO(payload))
+    return {sn: pd.read_excel(io.BytesIO(payload), sheet_name=sn, header=None) for sn in xls.sheet_names}
 
 
 def _parse_uploaded_content_file(name: str, payload: bytes) -> tuple[list[dict[str, Any]], list[str]]:
@@ -2479,10 +3369,116 @@ def _render_content_archive(cfg, cfg_path: Path, nikki_path: Path) -> None:
             try:
                 payload = uploaded.getvalue()
                 sig = f"{uploaded.name}:{hashlib.sha1(payload).hexdigest()}"
-                if st.session_state.get("archive_import_last_sig") != sig:
-                    imp_rows, _imp_notes = _parse_uploaded_content_file(uploaded.name, payload)
+                raw_sheets = _uploaded_content_raw_sheets(uploaded.name, payload)
+                sheet_names = list(raw_sheets.keys())
+                st.markdown("##### Normalize uploaded content")
+                st.caption(
+                    "Map the station file into the standard fields before importing. "
+                    "This keeps Available Content consistent even when Excel column names differ."
+                )
+                selected_sheet = st.selectbox("Sheet to import", sheet_names, key="archive_import_sheet")
+                raw_df = raw_sheets[selected_sheet]
+                detected_header = _detect_import_header_row(raw_df)
+                header_row = int(
+                    st.number_input(
+                        "Header row",
+                        min_value=1,
+                        max_value=max(1, min(20, len(raw_df))),
+                        value=detected_header + 1,
+                        step=1,
+                        key="archive_import_header_row",
+                        help="The row containing column labels in the uploaded file.",
+                    )
+                ) - 1
+                norm_df = _dataframe_from_header_row(raw_df, header_row)
+                columns = [str(c) for c in norm_df.columns]
+                col_opts = [""] + columns
+                default_type = st.radio(
+                    "Rows are",
+                    ("Auto-detect", "Series", "Movies / specials"),
+                    horizontal=True,
+                    key="archive_import_default_type",
+                )
+                default_series = ""
+                if default_type == "Series":
+                    default_series = st.text_input(
+                        "Default series title (used if the file has no series/show column)",
+                        value=str(selected_sheet).strip(),
+                        key="archive_import_default_series",
+                    )
+
+                def pick_col(label: str, canon: str, *, required: bool = False) -> str:
+                    default_col = _guess_import_column(columns, canon)
+                    idx = col_opts.index(default_col) if default_col in col_opts else 0
+                    text = f"{label}{' *' if required else ''}"
+                    return st.selectbox(text, col_opts, index=idx, key=f"archive_import_map_{canon}")
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    map_series = pick_col("Series / show", "series_title")
+                    map_title = pick_col("Episode or movie title", "title", required=True)
+                    map_ep = pick_col("Episode number", "episode_number")
+                    map_runtime = pick_col("Runtime", "runtime")
+                    map_type = pick_col("Content type", "content_type")
+                with c2:
+                    map_genre = pick_col("Genre", "genre")
+                    map_airdate = pick_col("Original airdate / year", "original_airdate")
+                    map_short = pick_col("Short synopsis", "synopsis_short")
+                    map_long = pick_col("Long synopsis", "synopsis_long")
+                    map_copyright = pick_col("Copyright", "copyright")
+
+                mapping = {
+                    "series_title": map_series,
+                    "title": map_title,
+                    "episode_number": map_ep,
+                    "runtime": map_runtime,
+                    "content_type": map_type,
+                    "genre": map_genre,
+                    "original_airdate": map_airdate,
+                    "synopsis_short": map_short,
+                    "synopsis_long": map_long,
+                    "copyright": map_copyright,
+                }
+                preview_rows = _import_rows_from_dataframe_with_mapping(
+                    norm_df,
+                    sheet_name=selected_sheet,
+                    source_name=uploaded.name,
+                    mapping=mapping,
+                    default_content_type=default_type,
+                    default_series_title=default_series,
+                )
+                if not map_title:
+                    st.warning("Map **Episode or movie title** before importing.")
+                if not preview_rows:
+                    st.warning("No rows could be normalized from this mapping.")
+                else:
+                    prev_df = pd.DataFrame(preview_rows)
+                    st.caption(f"Preview: **{len(preview_rows)}** normalized row(s).")
+                    st.dataframe(
+                        prev_df[
+                            [
+                                "content_type",
+                                "display_name",
+                                "series_title",
+                                "episode_number",
+                                "episode_title",
+                                "runtime_minutes",
+                                "genre",
+                            ]
+                        ].head(50),
+                        use_container_width=True,
+                        hide_index=True,
+                        height=240,
+                    )
+                if st.button(
+                    "Import normalized content",
+                    type="primary",
+                    key="archive_import_normalized_submit",
+                    disabled=(not map_title or not preview_rows),
+                    use_container_width=True,
+                ):
                     existing = _load_imported_catalog_rows(cfg_path)
-                    merged = _merge_import_rows(existing, imp_rows)
+                    merged = _merge_import_rows(existing, preview_rows)
                     _save_imported_catalog_rows(cfg_path, merged)
                     st.session_state["archive_import_last_sig"] = sig
                     st.session_state["archive_show_upload_picker"] = False
@@ -3034,6 +4030,16 @@ def _render_schedule_tab(cfg, cfg_path: Path, nikki_path: Path) -> None:
 
 
 def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
+    if _needs_schedule_origin_gate(cfg, cfg_path):
+        if not _render_schedule_origin_gate(cfg, cfg_path):
+            return
+        cfg = load_build_config(cfg_path)
+
+    last_report_rows = st.session_state.pop("create_schedule_last_report", None)
+    if isinstance(last_report_rows, list) and last_report_rows:
+        st.success("Schedule generated.")
+        _render_schedule_report(cfg, cfg_path, last_report_rows, title="Generated schedule report")
+
     if not nikki.is_file():
         st.error(
             f"Spreadsheet file not found:\n`{nikki}`\n\n"
@@ -3042,8 +4048,21 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         return
 
     if not cfg.weeks:
-        st.error("No **weeks** in your base schedule file — add week lines or use another base schedule file.")
+        st.error("No **weeks** in your base schedule file — complete **New station setup** above or pick another base schedule.")
         return
+
+    mode_key = _schedule_origin_mode_key(cfg_path)
+    if st.session_state.get(mode_key) == "import_existing" and "binge_path" in st.session_state:
+        with st.expander("Imported schedule loaded", expanded=False):
+            st.caption(
+                "Building continues from your imported BINGE / GRIDS. "
+                "Use **Edit schedules** to swap shows, or run **Create Schedule** to regenerate."
+            )
+            if st.button("Change starting point", key="schedule_origin_reset"):
+                st.session_state.pop(mode_key, None)
+                for k in ("binge_path", "grids_path", "out_dir"):
+                    st.session_state.pop(k, None)
+                st.rerun()
 
     months_all = _months_for_build_selector(cfg.weeks)
     if not months_all:
