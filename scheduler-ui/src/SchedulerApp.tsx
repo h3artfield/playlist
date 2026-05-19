@@ -259,7 +259,8 @@ function renderEventContent(arg: EventContentArg) {
     block.episodeCode ? `Episode: ${block.episodeCode}${block.episodeTitle ? ` - ${block.episodeTitle}` : ''}` : block.episodeTitle ? `Title: ${block.episodeTitle}` : '',
     block.genre ? `Genre: ${block.genre}` : '',
     block.contentType ? `Type: ${block.contentType}` : '',
-    block.runtimeMinutes ? `Runtime: ${block.runtimeMinutes} minutes` : `Scheduled: ${minutes} minutes`,
+    block.runtimeMinutes ? `Runtime: ${block.runtimeMinutes} minutes` : '',
+    `Scheduled slot: ${minutes} minutes`,
   ]
     .filter(Boolean)
     .join('\n')
@@ -441,7 +442,8 @@ export default function SchedulerApp({
         const ep = episodePool[epIndex]
         const remainingMinutes = minutesBetween(cursor, range.end)
         if (!episodeFitsSlot(ep, remainingMinutes)) break
-        const end = addMinutes(cursor, ep.durationMinutes)
+        const isMovie = isMovieEpisode(ep)
+        const end = isMovie ? new Date(range.end) : addMinutes(cursor, ep.durationMinutes)
         if (end > range.end) break
         nextBlocks.push({
           id: `${ep.id}-${cursor.getTime()}`,
@@ -458,6 +460,7 @@ export default function SchedulerApp({
         })
         cursor = end
         epIndex += 1
+        if (isMovie) break
       }
     }
 
