@@ -248,8 +248,14 @@ function sameTimeRanges(a: TimeRange[], b: TimeRange[]): boolean {
   )
 }
 
-function selectionTouchesBottomPadding(start: Date, end: Date): boolean {
-  return !sameLocalDay(start, end) && minutesOfDay(end) > 0
+function durationTime(minutes: number): string {
+  const hours = Math.floor(minutes / 60)
+  const mins = minutes % 60
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:00`
+}
+
+function selectionTouchesBottomPadding(start: Date, end: Date, dayStartMinutes: number): boolean {
+  return !sameLocalDay(start, end) && minutesOfDay(end) > dayStartMinutes
 }
 
 function colorForShow(show: string): string {
@@ -384,7 +390,8 @@ export default function SchedulerApp({
     return addMinutes(base, -diff * 24 * 60)
   }, [firstDayOfWeek, startDate])
   const calendarStart = useMemo(() => addMinutes(baseCalendarStart, visibleWeekIndex * 7 * 24 * 60), [baseCalendarStart, visibleWeekIndex])
-  const calendarEnd = useMemo(() => addMinutes(calendarStart, 7 * 24 * 60), [calendarStart])
+  const dayStartMinutes = startTimeHour * 60
+  const calendarEnd = useMemo(() => addMinutes(calendarStart, 7 * 24 * 60 + dayStartMinutes), [calendarStart, dayStartMinutes])
   const scheduleWeekStarts = useMemo(
     () => Array.from({ length: scheduleLengthWeeks }, (_, index) => addMinutes(baseCalendarStart, index * 7 * 24 * 60)),
     [baseCalendarStart, scheduleLengthWeeks],
@@ -410,7 +417,9 @@ export default function SchedulerApp({
   }, [previewRanges, visibleBlocks])
   const selectedBlockIdSet = useMemo(() => new Set(selectedBlockIds), [selectedBlockIds])
   const firstDayIndex = dayIndexByName[firstDayOfWeek] ?? 1
-  const calendarScrollTime = `${String(startTimeHour).padStart(2, '0')}:00:00`
+  const calendarSlotMinTime = durationTime(dayStartMinutes)
+  const calendarSlotMaxTime = durationTime(dayStartMinutes + 24 * 60 + 30)
+  const calendarScrollTime = calendarSlotMinTime
 
   const totals = useMemo(() => {
     const totalMinutes = scheduleLengthWeeks * 7 * 24 * 60
@@ -571,7 +580,7 @@ export default function SchedulerApp({
   }
 
   function handleSelectAllow(arg: { start: Date; end: Date }) {
-    if (selectionTouchesBottomPadding(arg.start, arg.end)) return false
+    if (selectionTouchesBottomPadding(arg.start, arg.end, dayStartMinutes)) return false
     const normalized = normalizeSelection(arg.start, arg.end)
     const preview = normalized.length > 1 ? normalized : []
     setLiveSelectionRanges((prev) => (sameTimeRanges(prev, preview) ? prev : preview))
@@ -780,8 +789,8 @@ export default function SchedulerApp({
                 </span>
               </div>
             )}
-            slotMinTime="00:00:00"
-            slotMaxTime="24:30:00"
+            slotMinTime={calendarSlotMinTime}
+            slotMaxTime={calendarSlotMaxTime}
           />
         </div>
 
