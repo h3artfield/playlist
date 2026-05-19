@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import FullCalendar from '@fullcalendar/react'
 import timeGridPlugin from '@fullcalendar/timegrid'
 import interactionPlugin from '@fullcalendar/interaction'
@@ -30,6 +30,9 @@ type ScheduledBlock = {
   show: string
   genre: string
   contentType: Episode['contentType']
+  runtimeMinutes: number
+  episodeCode: string
+  episodeTitle: string
 }
 
 type TimeRange = {
@@ -251,8 +254,17 @@ function renderEventContent(arg: EventContentArg) {
   const minutes = minutesBetween(arg.event.start || new Date(), arg.event.end || new Date())
   const title = block.title || arg.event.title || ''
   const [code = '', ...titleParts] = title.split(' ')
+  const details = [
+    block.show ? `Show: ${block.show}` : '',
+    block.episodeCode ? `Episode: ${block.episodeCode}${block.episodeTitle ? ` - ${block.episodeTitle}` : ''}` : block.episodeTitle ? `Title: ${block.episodeTitle}` : '',
+    block.genre ? `Genre: ${block.genre}` : '',
+    block.contentType ? `Type: ${block.contentType}` : '',
+    block.runtimeMinutes ? `Runtime: ${block.runtimeMinutes} minutes` : `Scheduled: ${minutes} minutes`,
+  ]
+    .filter(Boolean)
+    .join('\n')
   return (
-    <div className={`event-card ${minutes <= 30 ? 'compact' : ''}`}>
+    <div className={`event-card ${minutes <= 30 ? 'compact' : ''}`} title={details}>
       <div className="event-time">{arg.timeText}</div>
       <div className="event-show">{block.show || arg.event.title}</div>
       <div className="event-code">{code}</div>
@@ -263,6 +275,20 @@ function renderEventContent(arg: EventContentArg) {
 
 function unique<T>(items: T[]): T[] {
   return Array.from(new Set(items))
+}
+
+function movieRuntimeCapacity(slotMinutes: number): number {
+  return Math.floor(slotMinutes * 0.75)
+}
+
+function isMovieEpisode(ep: Episode): boolean {
+  return ep.contentType === 'Movie / special' || ep.genre.toLowerCase() === 'movie' || ep.code.toUpperCase() === 'MOVIE'
+}
+
+function episodeFitsSlot(ep: Episode, slotMinutes: number | null): boolean {
+  if (!slotMinutes) return true
+  if (isMovieEpisode(ep)) return ep.durationMinutes <= movieRuntimeCapacity(slotMinutes)
+  return ep.durationMinutes <= slotMinutes
 }
 
 export default function SchedulerApp({ stationId, onBack }: { stationId?: string; onBack?: () => void }) {
@@ -281,9 +307,16 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
   const [suggestedRules, setSuggestedRules] = useState<SuggestedRule[]>([])
   const [missingSlotCount, setMissingSlotCount] = useState<number | null>(null)
   const [isGenerating, setIsGenerating] = useState(false)
+  const contentInputRef = useRef<HTMLInputElement | null>(null)
 
   const availableEpisodes = catalogEpisodes.length ? catalogEpisodes : SAMPLE_EPISODES
-  const shows = useMemo(() => unique(availableEpisodes.map((ep) => ep.show)).sort(), [availableEpisodes])
+  const selectedRangeDurations = selectedRanges.map((range) => minutesBetween(range.start, range.end))
+  const selectedSlotMinutes = selectedRangeDurations.length ? Math.min(...selectedRangeDurations) : null
+  const selectableEpisodes = useMemo(
+    () => availableEpisodes.filter((ep) => episodeFitsSlot(ep, selectedSlotMinutes)),
+    [availableEpisodes, selectedSlotMinutes],
+  )
+  const shows = useMemo(() => unique(selectableEpisodes.map((ep) => ep.show)).sort(), [selectableEpisodes])
   const matchingShow = shows.find((show) => show.toLowerCase() === showQuery.trim().toLowerCase()) || ''
   const filteredShows = useMemo(() => {
     const q = showQuery.trim().toLowerCase()
@@ -291,11 +324,11 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
     return shows.filter((show) => show.toLowerCase().includes(q))
   }, [matchingShow, showQuery, shows])
   const episodesForShow = useMemo(
-    () => availableEpisodes.filter((ep) => ep.show === matchingShow),
-    [availableEpisodes, matchingShow],
+    () => selectableEpisodes.filter((ep) => ep.show === matchingShow),
+    [selectableEpisodes, matchingShow],
   )
 
-  const selectedMinutes = selectedRanges.reduce((total, range) => total + minutesBetween(range.start, range.end), 0)
+  const selectedMinutes = selectedRangeDurations.reduce((total, minutes) => total + minutes, 0)
   const selectedSlots = Math.floor(selectedMinutes / 30)
   const selectedRange = selectedRanges[0] || null
   const selectedLastRange = selectedRanges[selectedRanges.length - 1] || null
@@ -361,6 +394,14 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
       if (event.key === 'Delete' || event.key === 'Backspace') {
         event.preventDefault()
         deleteSelected()
+        return
+      }
+      if (selectedRanges.length && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault()
+        setShowQuery(event.key)
+        setStartingEpisodeId('')
+        setContentMenuOpen(true)
+        requestAnimationFrame(() => contentInputRef.current?.focus())
       }
     }
 
@@ -381,6 +422,8 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
       let cursor = new Date(range.start)
       while (cursor < range.end && epIndex < episodePool.length) {
         const ep = episodePool[epIndex]
+        const remainingMinutes = minutesBetween(cursor, range.end)
+        if (!episodeFitsSlot(ep, remainingMinutes)) break
         const end = addMinutes(cursor, ep.durationMinutes)
         if (end > range.end) break
         nextBlocks.push({
@@ -392,6 +435,9 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
           show: ep.show,
           genre: ep.genre,
           contentType: ep.contentType,
+          runtimeMinutes: ep.durationMinutes,
+          episodeCode: ep.code,
+          episodeTitle: ep.title,
         })
         cursor = end
         epIndex += 1
@@ -616,6 +662,7 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
               Select content
               <div className="content-combo">
                 <input
+                  ref={contentInputRef}
                   value={showQuery}
                   onChange={(event) => {
                     const nextValue = event.target.value
@@ -659,6 +706,7 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
               </div>
               <span className="picker-note">
                 Showing {filteredShows.length.toLocaleString()} of {shows.length.toLocaleString()} content items
+                {selectedSlotMinutes ? ` that fit ${selectedSlotMinutes} minutes` : ''}
               </span>
             </label>
 
@@ -684,7 +732,7 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
               disabled={!selectedRanges.length || !matchingShow || !startingEpisodeId}
               onClick={fillSelectedRange}
             >
-              Assign Time Slot
+              Commit
             </button>
             <button className="ghost-action wide" type="button" disabled={!selectedRanges.length && !selectedBlockIds.length} onClick={deleteSelected}>
               Delete Selected
