@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 import os
 import sys
+import threading
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -50,6 +51,14 @@ def create_app() -> FastAPI:
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.post("/api/desktop/shutdown")
+    def desktop_shutdown() -> dict[str, bool]:
+        """Close the packaged desktop process when the UI browser tab exits."""
+        is_desktop = os.environ.get("SCHEDULE_BUILDER_DESKTOP_RUNTIME") == "1"
+        if is_desktop:
+            threading.Timer(0.25, lambda: os._exit(0)).start()
+        return {"desktop_runtime": is_desktop, "shutdown_requested": is_desktop}
 
     @app.get("/api/content-catalog")
     def content_catalog(config: str = str(DEFAULT_CONFIG)) -> dict[str, Any]:

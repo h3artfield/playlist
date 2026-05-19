@@ -36,6 +36,21 @@ const NAV_ITEMS: Array<{ id: PageId; label: string }> = [
 export default function App() {
   const [page, setPage] = useState<PageId>('create')
   const [baseLabel, setBaseLabel] = useState('Checking...')
+  const [draftStationId, setDraftStationId] = useState('')
+
+  useEffect(() => {
+    function requestDesktopShutdown() {
+      const url = '/api/desktop/shutdown'
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(url, new Blob([], { type: 'text/plain' }))
+        return
+      }
+      void fetch(url, { method: 'POST', keepalive: true }).catch(() => undefined)
+    }
+
+    window.addEventListener('pagehide', requestDesktopShutdown)
+    return () => window.removeEventListener('pagehide', requestDesktopShutdown)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -47,13 +62,13 @@ export default function App() {
           return
         }
         if (payload.schedules?.length) {
-          setBaseLabel('No base schedule yet')
+          setBaseLabel('No schedule yet')
           return
         }
-        setBaseLabel('No base schedule yet')
+        setBaseLabel('No schedule yet')
       })
       .catch(() => {
-        if (!cancelled) setBaseLabel('No base schedule yet')
+        if (!cancelled) setBaseLabel('No schedule yet')
       })
     return () => {
       cancelled = true
@@ -68,7 +83,7 @@ export default function App() {
           <h1>Schedule Builder</h1>
         </div>
         <div className="base-schedule-control">
-          <span>Base schedule</span>
+          <span>Schedule</span>
           <button type="button">{baseLabel}</button>
         </div>
       </header>
@@ -89,8 +104,15 @@ export default function App() {
       </nav>
 
       <main className="app-content">
-        {page === 'create' ? <CreateSchedulePage onBlankSchedule={() => setPage('blank')} /> : null}
-        {page === 'blank' ? <SchedulerApp onBack={() => setPage('create')} /> : null}
+        {page === 'create' ? (
+          <CreateSchedulePage
+            onBlankSchedule={(stationId) => {
+              setDraftStationId(stationId)
+              setPage('blank')
+            }}
+          />
+        ) : null}
+        {page === 'blank' ? <SchedulerApp stationId={draftStationId} onBack={() => setPage('create')} /> : null}
         {page === 'archive' ? <ArchivePage /> : null}
         {page === 'edit' ? <EditSchedulePage /> : null}
       </main>
@@ -98,10 +120,12 @@ export default function App() {
   )
 }
 
-function CreateSchedulePage({ onBlankSchedule }: { onBlankSchedule: () => void }) {
+function CreateSchedulePage({ onBlankSchedule }: { onBlankSchedule: (stationId: string) => void }) {
   const [apiStatus, setApiStatus] = useState('Checking local API...')
   const [baseStatus, setBaseStatus] = useState('Checking for a saved base schedule...')
   const [activeBase, setActiveBase] = useState<BaseScheduleSummary | null>(null)
+  const [stationId, setStationId] = useState('')
+  const [stationIdError, setStationIdError] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -136,17 +160,44 @@ function CreateSchedulePage({ onBlankSchedule }: { onBlankSchedule: () => void }
     <main className="app-page">
       <section className="create-panel">
         <div>
-          <h2>Create a base schedule</h2>
+          <h2>Create a schedule</h2>
         </div>
-        <button className="primary-action card-action" type="button" onClick={onBlankSchedule}>
-          Blank Schedule
-        </button>
+        <div className="create-actions">
+          <label className="station-id-field">
+            <span>Station ID</span>
+            <input
+              type="text"
+              value={stationId}
+              aria-invalid={Boolean(stationIdError)}
+              required
+              onChange={(event) => {
+                setStationId(event.target.value)
+                if (stationIdError) setStationIdError('')
+              }}
+            />
+            {stationIdError ? <small>{stationIdError}</small> : null}
+          </label>
+          <button
+            className="primary-action card-action"
+            type="button"
+            onClick={() => {
+              const cleaned = stationId.trim()
+              if (!cleaned) {
+                setStationIdError('Required')
+                return
+              }
+              onBlankSchedule(cleaned)
+            }}
+          >
+            New Schedule
+          </button>
+        </div>
       </section>
 
       {activeBase ? (
         <section className="build-panel">
           <div>
-            <h3>Auto generate schedule from base</h3>
+            <h3>Auto generate schedule</h3>
             <p>{baseStatus}</p>
             <p>{apiStatus}</p>
           </div>
@@ -156,7 +207,7 @@ function CreateSchedulePage({ onBlankSchedule }: { onBlankSchedule: () => void }
         </section>
       ) : (
         <section className="build-panel disabled-panel" aria-disabled="true">
-          <h2>Auto generate schedule from base</h2>
+          <h2>Auto generate schedule</h2>
           <button className="primary-action card-action" type="button" disabled>
             Create Schedule
           </button>

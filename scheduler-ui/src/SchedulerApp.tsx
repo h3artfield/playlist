@@ -219,7 +219,7 @@ function unique<T>(items: T[]): T[] {
   return Array.from(new Set(items))
 }
 
-export default function SchedulerApp({ onBack }: { onBack?: () => void }) {
+export default function SchedulerApp({ stationId, onBack }: { stationId?: string; onBack?: () => void }) {
   const [blocks, setBlocks] = useState<ScheduledBlock[]>([])
   const [selectedRange, setSelectedRange] = useState<{ start: Date; end: Date } | null>(null)
   const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([])
@@ -228,7 +228,7 @@ export default function SchedulerApp({ onBack }: { onBack?: () => void }) {
   const [startDate, setStartDate] = useState('2026-05-18')
   const [firstDayOfWeek, setFirstDayOfWeek] = useState('Monday')
   const [catalogEpisodes, setCatalogEpisodes] = useState<Episode[]>([])
-  const [catalogStatus, setCatalogStatus] = useState('Loading normalized content...')
+  const [, setCatalogStatus] = useState('Loading normalized content...')
   const [contentMenuOpen, setContentMenuOpen] = useState(false)
   const [generateStatus, setGenerateStatus] = useState('Ready to analyze schedule draft.')
   const [suggestedRules, setSuggestedRules] = useState<SuggestedRule[]>([])
@@ -439,10 +439,8 @@ export default function SchedulerApp({ onBack }: { onBack?: () => void }) {
     <main className="scheduler-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">Schedule Builder</p>
-          <h1>Blank Schedule Builder</h1>
-          <p className="subhead">Drag across the calendar to highlight time, type a show, then fill the block in episode order.</p>
-          <p className="catalog-status">{catalogStatus}</p>
+          {stationId ? <p className="station-context">Station ID: {stationId}</p> : null}
+          <p className="subhead">Drag across the calendar to highlight time, type a show, then fill the time slots in episode order.</p>
         </div>
         <div className="topbar-actions">
           {onBack ? (
@@ -525,7 +523,7 @@ export default function SchedulerApp({ onBack }: { onBack?: () => void }) {
 
         <aside className="side-panel">
           <div className="panel-section">
-            <p className="panel-title">Selected block</p>
+            <p className="panel-title">Selected time slot</p>
             {selectedRange ? (
               <div className="selected-range">
                 <strong>{selectedSlots} half-hours</strong>
@@ -549,13 +547,13 @@ export default function SchedulerApp({ onBack }: { onBack?: () => void }) {
                 <span>Press Delete or click Delete Selected to remove.</span>
               </div>
             ) : (
-              <p className="muted">Drag across time cells to select a block.</p>
+              <p className="muted">Drag across time cells to select a time slot.</p>
             )}
           </div>
 
           <div className="panel-section">
             <label>
-              Select block content
+              Select content
               <div className="content-combo">
                 <input
                   value={showQuery}
@@ -626,7 +624,7 @@ export default function SchedulerApp({ onBack }: { onBack?: () => void }) {
               disabled={!selectedRange || !matchingShow || !startingEpisodeId}
               onClick={fillSelectedRange}
             >
-              Fill Selected Block
+              Assign Time Slot
             </button>
             <button className="ghost-action wide" type="button" disabled={!selectedRange && !selectedBlockIds.length} onClick={deleteSelected}>
               Delete Selected
