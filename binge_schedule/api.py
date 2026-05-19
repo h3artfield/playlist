@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import json
 from pathlib import Path
 import os
 import sys
@@ -62,6 +63,10 @@ def create_app() -> FastAPI:
 
     @app.get("/api/content-catalog")
     def content_catalog(config: str = str(DEFAULT_CONFIG)) -> dict[str, Any]:
+        if Path(config) == DEFAULT_CONFIG:
+            static_payload = _static_catalog_payload()
+            if static_payload is not None:
+                return static_payload
         cfg_path = _safe_config_path(config)
         cfg = load_build_config(cfg_path)
         rows = canonical_rows_from_config(cfg)
@@ -125,6 +130,47 @@ def create_app() -> FastAPI:
         app.mount("/", StaticFiles(directory=ui_dist, html=True), name="scheduler-ui")
 
     return app
+
+
+def _static_catalog_payload() -> dict[str, Any] | None:
+    path = _static_catalog_path()
+    if path is None:
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if isinstance(payload, dict) and isinstance(payload.get("rows"), list):
+        return payload
+    return None
+
+
+def _static_catalog_path() -> Path | None:
+    candidates: list[Path] = []
+    ui_dist = _ui_dist_path()
+    if ui_dist is not None:
+        candidates.append(ui_dist / "content-catalog.json")
+
+    module_root = Path(__file__).resolve().parents[1]
+    exe_dir = Path(sys.executable).resolve().parent
+    meipass = Path(getattr(sys, "_MEIPASS", "")) if getattr(sys, "_MEIPASS", None) else None
+    candidates.extend(
+        [
+            Path.cwd() / "scheduler-ui" / "public" / "content-catalog.json",
+            Path.cwd() / "scheduler-ui" / "dist" / "content-catalog.json",
+            module_root / "scheduler-ui" / "public" / "content-catalog.json",
+            module_root / "scheduler-ui" / "dist" / "content-catalog.json",
+            exe_dir / "scheduler-ui" / "dist" / "content-catalog.json",
+            exe_dir / "_internal" / "scheduler-ui" / "dist" / "content-catalog.json",
+        ]
+    )
+    if meipass is not None:
+        candidates.append(meipass / "scheduler-ui" / "dist" / "content-catalog.json")
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _ui_dist_path() -> Path | None:
