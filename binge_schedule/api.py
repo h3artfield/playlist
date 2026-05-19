@@ -39,6 +39,13 @@ class GridToBlocksPayload(BaseModel):
     grid: list[list[Optional[str]]]
 
 
+class SaveBaseSchedulePayload(BaseModel):
+    station_id: str
+    week_monday: date
+    blocks: list[dict[str, Any]] = Field(default_factory=list)
+    suggested_rules: list[dict[str, Any]] = Field(default_factory=list)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Playlist Schedule Builder API", version="0.1.0")
     app.add_middleware(
@@ -123,6 +130,29 @@ def create_app() -> FastAPI:
             "week_monday": payload.week_monday.isoformat(),
             "block_count": len(blocks),
             "blocks": [block.to_dict() for block in blocks],
+        }
+
+    @app.post("/api/base-schedules/save")
+    def save_base_schedule(payload: SaveBaseSchedulePayload) -> dict[str, Any]:
+        station_id = payload.station_id.strip()
+        if not station_id:
+            raise HTTPException(status_code=400, detail="Station ID is required")
+        if not payload.blocks:
+            raise HTTPException(status_code=400, detail="Schedule has no blocks")
+        missing = empty_slots_for_blocks(payload.blocks, week_monday=payload.week_monday)
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Schedule has {len(missing)} empty half-hour slots")
+        path = _save_builder_base_schedule(
+            station_id=station_id,
+            week_monday=payload.week_monday,
+            blocks=payload.blocks,
+            suggested_rules=payload.suggested_rules,
+        )
+        return {
+            "saved": True,
+            "path": path.as_posix(),
+            "label": _base_schedule_label(path, station_id),
+            "station_id": station_id,
         }
 
     ui_dist = _ui_dist_path()
@@ -212,6 +242,70 @@ def _safe_config_path(raw: str) -> Path:
     return p
 
 
+def _save_builder_base_schedule(
+    *,
+    station_id: str,
+    week_monday: date,
+    blocks: list[dict[str, Any]],
+    suggested_rules: list[dict[str, Any]],
+) -> Path:
+    safe_station = _safe_station_id(station_id)
+    path = Path("config") / f"base_schedule_{safe_station}.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    source = _base_schedule_source_config()
+    base = {
+        "gracenote_binge_id": int(source.get("gracenote_binge_id", 0) or 0),
+        "nikki_workbook": source.get("nikki_workbook") or "../data/2024 Nikki Spreadsheets.xlsx",
+        "timezone_note": source.get("timezone_note") or "local",
+        "wrap_episodes": bool(source.get("wrap_episodes", True)),
+        "cursor_state_file": f"episode_cursors_{safe_station}.json",
+        "schedule_builder": {
+            "managed": True,
+            "kind": "base_schedule",
+            "source": "react_schedule_builder",
+            "station_id": station_id,
+            "week_monday": week_monday.isoformat(),
+            "draft_block_count": len(blocks),
+            "draft_blocks": blocks,
+            "suggested_rules": suggested_rules,
+        },
+        "shows": source.get("shows") if isinstance(source.get("shows"), dict) else {},
+        "weeks": [
+            {
+                "monday": week_monday.isoformat(),
+                "grids_file": f"../data/base_schedules/{safe_station}/base_schedule_grids.xlsx",
+                "sheet_name": week_monday.strftime("%-m-%-d-%Y") if os.name != "nt" else f"{week_monday.month}-{week_monday.day}-{week_monday.year}",
+            }
+        ],
+    }
+    path.write_text(yaml.safe_dump(base, sort_keys=False, allow_unicode=False), encoding="utf-8")
+    return path
+
+
+def _base_schedule_source_config() -> dict[str, Any]:
+    for path in (Path("config") / "blank_schedule.yaml", DEFAULT_CONFIG):
+        try:
+            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(raw, dict):
+            return raw
+    return {}
+
+
+def _safe_station_id(station_id: str) -> str:
+    cleaned = "".join(ch.lower() if ch.isalnum() else "_" for ch in station_id.strip())
+    cleaned = "_".join(part for part in cleaned.split("_") if part)
+    return cleaned or "station"
+
+
+def _base_schedule_label(path: Path, station_id: str | None = None) -> str:
+    sid = (station_id or "").strip()
+    if sid:
+        return f"Station {sid}"
+    return path.stem.replace("_", " ").title()
+
+
 def _builder_base_schedules() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     config_dir = Path("config")
@@ -227,17 +321,20 @@ def _builder_base_schedules() -> list[dict[str, Any]]:
         marker = raw.get("schedule_builder")
         if not isinstance(marker, dict) or marker.get("managed") is not True:
             continue
+        station_id = str(marker.get("station_id") or "").strip()
         weeks = raw.get("weeks") if isinstance(raw.get("weeks"), list) else []
         shows = raw.get("shows") if isinstance(raw.get("shows"), dict) else {}
         out.append(
             {
                 "path": path.as_posix(),
-                "label": path.stem.replace("_", " ").title(),
+                "label": _base_schedule_label(path, station_id),
+                "station_id": station_id,
                 "kind": marker.get("kind") or "base_schedule",
                 "source": marker.get("source") or "",
                 "week_count": len(weeks),
                 "show_count": len(shows),
-                "ready_to_generate": bool(weeks),
+                "draft_block_count": int(marker.get("draft_block_count") or 0),
+                "ready_to_generate": bool(weeks) and int(marker.get("draft_block_count") or 0) > 0,
             }
         )
     return out

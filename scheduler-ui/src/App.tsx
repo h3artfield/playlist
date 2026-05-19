@@ -22,6 +22,7 @@ type ContentCategory = 'series' | 'movie' | 'paid_programming'
 type BaseScheduleSummary = {
   path: string
   label: string
+  station_id?: string
   week_count: number
   show_count: number
   ready_to_generate: boolean
@@ -112,7 +113,13 @@ export default function App() {
             }}
           />
         ) : null}
-        {page === 'blank' ? <SchedulerApp stationId={draftStationId} onBack={() => setPage('create')} /> : null}
+        {page === 'blank' ? (
+          <SchedulerApp
+            stationId={draftStationId}
+            onBack={() => setPage('create')}
+            onBaseSaved={(label) => setBaseLabel(label)}
+          />
+        ) : null}
         {page === 'archive' ? <ArchivePage /> : null}
         {page === 'edit' ? <EditSchedulePage /> : null}
       </main>

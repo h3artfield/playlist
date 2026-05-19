@@ -291,19 +291,30 @@ function episodeFitsSlot(ep: Episode, slotMinutes: number | null): boolean {
   return ep.durationMinutes <= slotMinutes
 }
 
-export default function SchedulerApp({ stationId, onBack }: { stationId?: string; onBack?: () => void }) {
+export default function SchedulerApp({
+  stationId,
+  onBack,
+  onBaseSaved,
+}: {
+  stationId?: string
+  onBack?: () => void
+  onBaseSaved?: (label: string) => void
+}) {
   const [blocks, setBlocks] = useState<ScheduledBlock[]>([])
   const [selectedRanges, setSelectedRanges] = useState<TimeRange[]>([])
   const [liveSelectionRanges, setLiveSelectionRanges] = useState<TimeRange[]>([])
   const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([])
   const [showQuery, setShowQuery] = useState('')
   const [startingEpisodeId, setStartingEpisodeId] = useState('')
+  const [contentMode, setContentMode] = useState<'series' | 'movies'>('series')
   const [startDate, setStartDate] = useState('2026-05-18')
   const [firstDayOfWeek, setFirstDayOfWeek] = useState('Monday')
   const [catalogEpisodes, setCatalogEpisodes] = useState<Episode[]>([])
   const [, setCatalogStatus] = useState('Loading normalized content...')
   const [contentMenuOpen, setContentMenuOpen] = useState(false)
   const [generateStatus, setGenerateStatus] = useState('Ready to analyze schedule draft.')
+  const [generateNotice, setGenerateNotice] = useState('')
+  const [generateNoticeKind, setGenerateNoticeKind] = useState<'info' | 'success' | 'error'>('info')
   const [suggestedRules, setSuggestedRules] = useState<SuggestedRule[]>([])
   const [missingSlotCount, setMissingSlotCount] = useState<number | null>(null)
   const [isGenerating, setIsGenerating] = useState(false)
@@ -313,8 +324,14 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
   const selectedRangeDurations = selectedRanges.map((range) => minutesBetween(range.start, range.end))
   const selectedSlotMinutes = selectedRangeDurations.length ? Math.min(...selectedRangeDurations) : null
   const selectableEpisodes = useMemo(
-    () => availableEpisodes.filter((ep) => episodeFitsSlot(ep, selectedSlotMinutes)),
-    [availableEpisodes, selectedSlotMinutes],
+    () =>
+      availableEpisodes.filter((ep) => {
+        const isMovie = isMovieEpisode(ep)
+        if (contentMode === 'movies' && !isMovie) return false
+        if (contentMode === 'series' && isMovie) return false
+        return episodeFitsSlot(ep, selectedSlotMinutes)
+      }),
+    [availableEpisodes, contentMode, selectedSlotMinutes],
   )
   const shows = useMemo(() => unique(selectableEpisodes.map((ep) => ep.show)).sort(), [selectableEpisodes])
   const matchingShow = shows.find((show) => show.toLowerCase() === showQuery.trim().toLowerCase()) || ''
@@ -480,6 +497,13 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
     setContentMenuOpen(false)
   }
 
+  function changeContentMode(mode: 'series' | 'movies') {
+    setContentMode(mode)
+    setShowQuery('')
+    setStartingEpisodeId('')
+    setContentMenuOpen(false)
+  }
+
   function handleSelectAllow(arg: { start: Date; end: Date }) {
     setLiveSelectionRanges(normalizeSelection(arg.start, arg.end))
     return true
@@ -499,12 +523,16 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
   async function generateScheduleDraft() {
     if (!blocks.length) {
       setGenerateStatus('Add at least one block before generating.')
+      setGenerateNotice('Add at least one scheduled block before generating.')
+      setGenerateNoticeKind('error')
       setSuggestedRules([])
       setMissingSlotCount(null)
       return
     }
     setIsGenerating(true)
     setGenerateStatus('Sending draft to local Python API...')
+    setGenerateNotice('Analyzing schedule draft...')
+    setGenerateNoticeKind('info')
     try {
       const payloadBlocks = blocks.map((block) => ({
         ...block,
@@ -527,11 +555,35 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
       ])
       setSuggestedRules(rulesPayload.rules || [])
       setMissingSlotCount(gridPayload.missing_slot_count)
+      const missingText = `${gridPayload.missing_slot_count.toLocaleString()} empty half-hour slot${
+        gridPayload.missing_slot_count === 1 ? '' : 's'
+      }`
+      const ruleText = `${rulesPayload.rule_count} rule suggestion${rulesPayload.rule_count === 1 ? '' : 's'}`
       setGenerateStatus(
         `Draft analyzed: ${rulesPayload.rule_count} rule suggestion${rulesPayload.rule_count === 1 ? '' : 's'} found.`,
       )
+      if (gridPayload.missing_slot_count === 0) {
+        const savePayload = await fetchJson<{ label: string; path: string }>('/api/base-schedules/save', {
+          method: 'POST',
+          body: JSON.stringify({
+            station_id: stationId || '',
+            week_monday: calendarStart.toISOString().slice(0, 10),
+            blocks: payloadBlocks,
+            suggested_rules: rulesPayload.rules || [],
+          }),
+        })
+        onBaseSaved?.(savePayload.label)
+        setGenerateNotice(`Schedule analyzed and saved as ${savePayload.label}. ${ruleText} found.`)
+        setGenerateNoticeKind('success')
+      } else {
+        setGenerateNotice(`Schedule analyzed but not saved yet. ${missingText}. ${ruleText} found.`)
+        setGenerateNoticeKind('info')
+      }
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Generate failed.'
       setGenerateStatus(error instanceof Error ? `Generate failed: ${error.message}` : 'Generate failed.')
+      setGenerateNotice(`Generate failed: ${message}`)
+      setGenerateNoticeKind('error')
       setSuggestedRules([])
       setMissingSlotCount(null)
     } finally {
@@ -557,6 +609,8 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
           </button>
         </div>
       </header>
+
+      {generateNotice ? <div className={`generate-notice ${generateNoticeKind}`}>{generateNotice}</div> : null}
 
       <section className="setup-card">
         <label>
@@ -658,6 +712,14 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
           </div>
 
           <div className="panel-section">
+            <div className="content-mode-toggle" aria-label="Content type">
+              <button className={contentMode === 'series' ? 'active' : ''} type="button" onClick={() => changeContentMode('series')}>
+                Series
+              </button>
+              <button className={contentMode === 'movies' ? 'active' : ''} type="button" onClick={() => changeContentMode('movies')}>
+                Movies
+              </button>
+            </div>
             <label>
               Select content
               <div className="content-combo">
