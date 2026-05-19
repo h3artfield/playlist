@@ -32,6 +32,11 @@ type ScheduledBlock = {
   contentType: Episode['contentType']
 }
 
+type TimeRange = {
+  start: Date
+  end: Date
+}
+
 type CanonicalContentRow = {
   content_type?: string
   series_key?: string
@@ -182,6 +187,46 @@ function minutesBetween(start: Date, end: Date): number {
   return Math.max(0, Math.round((end.getTime() - start.getTime()) / 60_000))
 }
 
+function startOfLocalDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate())
+}
+
+function minutesOfDay(d: Date): number {
+  return d.getHours() * 60 + d.getMinutes()
+}
+
+function sameLocalDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+}
+
+function rangeOverlaps(block: ScheduledBlock, range: TimeRange): boolean {
+  const blockStart = new Date(block.start)
+  const blockEnd = new Date(block.end)
+  return blockStart < range.end && blockEnd > range.start
+}
+
+function normalizeSelection(start: Date, end: Date): TimeRange[] {
+  if (end <= start) return []
+  const endMarker = addMinutes(end, -1)
+  if (sameLocalDay(start, endMarker)) return [{ start, end }]
+
+  const startMinute = minutesOfDay(start)
+  const endMinute = minutesOfDay(end) || 24 * 60
+  if (endMinute <= startMinute) return [{ start, end }]
+
+  const ranges: TimeRange[] = []
+  let day = startOfLocalDay(start)
+  const lastDay = startOfLocalDay(endMarker)
+  while (day <= lastDay) {
+    ranges.push({
+      start: addMinutes(day, startMinute),
+      end: addMinutes(day, endMinute),
+    })
+    day = addMinutes(day, 24 * 60)
+  }
+  return ranges
+}
+
 function colorForShow(show: string): string {
   let total = 0
   for (const ch of show) total += ch.charCodeAt(0)
@@ -201,7 +246,8 @@ function eventFromBlock(block: ScheduledBlock): EventInput {
 }
 
 function renderEventContent(arg: EventContentArg) {
-  const block = arg.event.extendedProps as ScheduledBlock
+  const block = arg.event.extendedProps as Partial<ScheduledBlock>
+  if (!block.show) return null
   const minutes = minutesBetween(arg.event.start || new Date(), arg.event.end || new Date())
   const title = block.title || arg.event.title || ''
   const [code = '', ...titleParts] = title.split(' ')
@@ -221,7 +267,8 @@ function unique<T>(items: T[]): T[] {
 
 export default function SchedulerApp({ stationId, onBack }: { stationId?: string; onBack?: () => void }) {
   const [blocks, setBlocks] = useState<ScheduledBlock[]>([])
-  const [selectedRange, setSelectedRange] = useState<{ start: Date; end: Date } | null>(null)
+  const [selectedRanges, setSelectedRanges] = useState<TimeRange[]>([])
+  const [liveSelectionRanges, setLiveSelectionRanges] = useState<TimeRange[]>([])
   const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([])
   const [showQuery, setShowQuery] = useState('')
   const [startingEpisodeId, setStartingEpisodeId] = useState('')
@@ -248,9 +295,19 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
     [availableEpisodes, matchingShow],
   )
 
-  const selectedMinutes = selectedRange ? minutesBetween(selectedRange.start, selectedRange.end) : 0
+  const selectedMinutes = selectedRanges.reduce((total, range) => total + minutesBetween(range.start, range.end), 0)
   const selectedSlots = Math.floor(selectedMinutes / 30)
-  const events = blocks.map(eventFromBlock)
+  const selectedRange = selectedRanges[0] || null
+  const selectedLastRange = selectedRanges[selectedRanges.length - 1] || null
+  const previewRanges = liveSelectionRanges.length ? liveSelectionRanges : selectedRanges
+  const selectedSlotEvents = previewRanges.map((range, index): EventInput => ({
+    id: `selected-slot-${index}`,
+    start: isoLocal(range.start),
+    end: isoLocal(range.end),
+    display: 'background',
+    classNames: ['selected-time-slot-event'],
+  }))
+  const events = [...blocks.map(eventFromBlock), ...selectedSlotEvents]
   const selectedBlockIdSet = useMemo(() => new Set(selectedBlockIds), [selectedBlockIds])
   const calendarStart = useMemo(() => {
     const base = new Date(`${startDate}T00:00:00`)
@@ -312,42 +369,42 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
   })
 
   function fillSelectedRange() {
-    if (!selectedRange || !matchingShow || !startingEpisodeId) return
+    if (!selectedRanges.length || !matchingShow || !startingEpisodeId) return
     const episodePool = episodesForShow
     const startIndex = episodePool.findIndex((ep) => ep.id === startingEpisodeId)
     if (startIndex < 0) return
 
     const nextBlocks: ScheduledBlock[] = []
-    let cursor = new Date(selectedRange.start)
     let epIndex = startIndex
 
-    while (cursor < selectedRange.end && epIndex < episodePool.length) {
-      const ep = episodePool[epIndex]
-      const end = addMinutes(cursor, ep.durationMinutes)
-      if (end > selectedRange.end) break
-      nextBlocks.push({
-        id: `${ep.id}-${cursor.getTime()}`,
-        episodeId: ep.id,
-        title: `${ep.code} ${ep.title}`,
-        start: isoLocal(cursor),
-        end: isoLocal(end),
-        show: ep.show,
-        genre: ep.genre,
-        contentType: ep.contentType,
-      })
-      cursor = end
-      epIndex += 1
+    for (const range of selectedRanges) {
+      let cursor = new Date(range.start)
+      while (cursor < range.end && epIndex < episodePool.length) {
+        const ep = episodePool[epIndex]
+        const end = addMinutes(cursor, ep.durationMinutes)
+        if (end > range.end) break
+        nextBlocks.push({
+          id: `${ep.id}-${cursor.getTime()}`,
+          episodeId: ep.id,
+          title: `${ep.code} ${ep.title}`,
+          start: isoLocal(cursor),
+          end: isoLocal(end),
+          show: ep.show,
+          genre: ep.genre,
+          contentType: ep.contentType,
+        })
+        cursor = end
+        epIndex += 1
+      }
     }
 
     setBlocks((prev) => [
       ...prev.filter((block) => {
-        const blockStart = new Date(block.start)
-        const blockEnd = new Date(block.end)
-        return blockEnd <= selectedRange.start || blockStart >= selectedRange.end
+        return !selectedRanges.some((range) => rangeOverlaps(block, range))
       }),
       ...nextBlocks,
     ])
-    setSelectedRange(null)
+    setSelectedRanges([])
     setSelectedBlockIds([])
     setShowQuery('')
     setStartingEpisodeId('')
@@ -361,31 +418,32 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
       setSelectedBlockIds([])
       return
     }
-    if (selectedRange) {
-      setBlocks((prev) =>
-        prev.filter((block) => {
-          const blockStart = new Date(block.start)
-          const blockEnd = new Date(block.end)
-          return blockEnd <= selectedRange.start || blockStart >= selectedRange.end
-        }),
-      )
-      setSelectedRange(null)
+    if (selectedRanges.length) {
+      setBlocks((prev) => prev.filter((block) => !selectedRanges.some((range) => rangeOverlaps(block, range))))
+      setSelectedRanges([])
     }
   }
 
   function handleSelect(arg: DateSelectArg) {
-    setSelectedRange({ start: arg.start, end: arg.end })
+    setSelectedRanges(normalizeSelection(arg.start, arg.end))
+    setLiveSelectionRanges([])
+    arg.view.calendar.unselect()
     setSelectedBlockIds([])
     setShowQuery('')
     setStartingEpisodeId('')
     setContentMenuOpen(false)
   }
 
+  function handleSelectAllow(arg: { start: Date; end: Date }) {
+    setLiveSelectionRanges(normalizeSelection(arg.start, arg.end))
+    return true
+  }
+
   function handleEventClick(arg: EventClickArg) {
     setSelectedBlockIds((prev) =>
       prev.includes(arg.event.id) ? prev.filter((id) => id !== arg.event.id) : [...prev, arg.event.id],
     )
-    setSelectedRange(null)
+    setSelectedRanges([])
   }
 
   function eventClassNames(arg: { event: { id: string } }) {
@@ -501,6 +559,7 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
             events={events}
             eventContent={renderEventContent}
             eventClassNames={eventClassNames}
+            selectAllow={handleSelectAllow}
             select={handleSelect}
             eventClick={handleEventClick}
             height="auto"
@@ -534,12 +593,13 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
                     minute: '2-digit',
                   })}
                   {' → '}
-                  {selectedRange.end.toLocaleString([], {
+                  {(selectedLastRange || selectedRange).end.toLocaleString([], {
                     weekday: 'short',
                     hour: 'numeric',
                     minute: '2-digit',
                   })}
                 </span>
+                {selectedRanges.length > 1 ? <span>{selectedRanges.length} matching day/time selections</span> : null}
               </div>
             ) : selectedBlockIds.length ? (
               <div className="selected-range">
@@ -621,12 +681,12 @@ export default function SchedulerApp({ stationId, onBack }: { stationId?: string
             <button
               className="primary-action wide"
               type="button"
-              disabled={!selectedRange || !matchingShow || !startingEpisodeId}
+              disabled={!selectedRanges.length || !matchingShow || !startingEpisodeId}
               onClick={fillSelectedRange}
             >
               Assign Time Slot
             </button>
-            <button className="ghost-action wide" type="button" disabled={!selectedRange && !selectedBlockIds.length} onClick={deleteSelected}>
+            <button className="ghost-action wide" type="button" disabled={!selectedRanges.length && !selectedBlockIds.length} onClick={deleteSelected}>
               Delete Selected
             </button>
           </div>
