@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 import json
 from pathlib import Path
 import os
@@ -42,6 +42,7 @@ class GridToBlocksPayload(BaseModel):
 class SaveBaseSchedulePayload(BaseModel):
     station_id: str
     week_monday: date
+    week_count: int = 1
     blocks: list[dict[str, Any]] = Field(default_factory=list)
     suggested_rules: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -139,12 +140,17 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="Station ID is required")
         if not payload.blocks:
             raise HTTPException(status_code=400, detail="Schedule has no blocks")
-        missing = empty_slots_for_blocks(payload.blocks, week_monday=payload.week_monday)
+        week_count = _bounded_week_count(payload.week_count)
+        missing = []
+        for week_index in range(week_count):
+            week_monday = payload.week_monday + timedelta(days=week_index * 7)
+            missing.extend(empty_slots_for_blocks(payload.blocks, week_monday=week_monday))
         if missing:
             raise HTTPException(status_code=400, detail=f"Schedule has {len(missing)} empty half-hour slots")
         path = _save_builder_base_schedule(
             station_id=station_id,
             week_monday=payload.week_monday,
+            week_count=week_count,
             blocks=payload.blocks,
             suggested_rules=payload.suggested_rules,
         )
@@ -246,6 +252,7 @@ def _save_builder_base_schedule(
     *,
     station_id: str,
     week_monday: date,
+    week_count: int,
     blocks: list[dict[str, Any]],
     suggested_rules: list[dict[str, Any]],
 ) -> Path:
@@ -265,6 +272,7 @@ def _save_builder_base_schedule(
             "source": "react_schedule_builder",
             "station_id": station_id,
             "week_monday": week_monday.isoformat(),
+            "week_count": week_count,
             "draft_block_count": len(blocks),
             "draft_blocks": blocks,
             "suggested_rules": suggested_rules,
@@ -272,14 +280,27 @@ def _save_builder_base_schedule(
         "shows": source.get("shows") if isinstance(source.get("shows"), dict) else {},
         "weeks": [
             {
-                "monday": week_monday.isoformat(),
+                "monday": (week_monday + timedelta(days=week_index * 7)).isoformat(),
                 "grids_file": f"../data/base_schedules/{safe_station}/base_schedule_grids.xlsx",
-                "sheet_name": week_monday.strftime("%-m-%-d-%Y") if os.name != "nt" else f"{week_monday.month}-{week_monday.day}-{week_monday.year}",
+                "sheet_name": _sheet_name_for_week(week_monday + timedelta(days=week_index * 7)),
             }
+            for week_index in range(week_count)
         ],
     }
     path.write_text(yaml.safe_dump(base, sort_keys=False, allow_unicode=False), encoding="utf-8")
     return path
+
+
+def _bounded_week_count(raw: int) -> int:
+    try:
+        val = int(raw)
+    except Exception:
+        return 1
+    return max(1, min(4, val))
+
+
+def _sheet_name_for_week(week_monday: date) -> str:
+    return f"{week_monday.month}-{week_monday.day}-{week_monday.year}"
 
 
 def _base_schedule_source_config() -> dict[str, Any]:

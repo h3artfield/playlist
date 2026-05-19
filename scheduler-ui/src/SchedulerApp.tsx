@@ -253,23 +253,24 @@ function renderEventContent(arg: EventContentArg) {
   if (!block.show) return null
   const minutes = minutesBetween(arg.event.start || new Date(), arg.event.end || new Date())
   const title = block.title || arg.event.title || ''
-  const [code = '', ...titleParts] = title.split(' ')
+  const isMovie = block.contentType === 'Movie / special' || block.genre?.toLowerCase() === 'movie' || block.episodeCode?.toUpperCase().startsWith('MOV')
+  const [, ...titleParts] = title.split(' ')
+  const displayTitle = isMovie ? block.show || block.episodeTitle || titleParts.join(' ') : titleParts.join(' ')
   const details = [
     block.show ? `Show: ${block.show}` : '',
     block.episodeCode ? `Episode: ${block.episodeCode}${block.episodeTitle ? ` - ${block.episodeTitle}` : ''}` : block.episodeTitle ? `Title: ${block.episodeTitle}` : '',
     block.genre ? `Genre: ${block.genre}` : '',
     block.contentType ? `Type: ${block.contentType}` : '',
-    block.runtimeMinutes ? `Runtime: ${block.runtimeMinutes} minutes` : '',
     `Scheduled slot: ${minutes} minutes`,
+    block.runtimeMinutes ? `Runtime: ${block.runtimeMinutes} minutes` : '',
+    block.runtimeMinutes ? `Avails: ${Math.max(0, minutes - block.runtimeMinutes)} minutes` : '',
   ]
     .filter(Boolean)
     .join('\n')
   return (
     <div className={`event-card ${minutes <= 30 ? 'compact' : ''}`} title={details}>
       <div className="event-time">{arg.timeText}</div>
-      <div className="event-show">{block.show || arg.event.title}</div>
-      <div className="event-code">{code}</div>
-      <div className="event-title">{titleParts.join(' ')}</div>
+      <div className="event-show">{displayTitle || block.show || arg.event.title}</div>
     </div>
   )
 }
@@ -310,6 +311,8 @@ export default function SchedulerApp({
   const [contentMode, setContentMode] = useState<'series' | 'movies'>('series')
   const [startDate, setStartDate] = useState('2026-05-18')
   const [firstDayOfWeek, setFirstDayOfWeek] = useState('Monday')
+  const [scheduleLengthWeeks, setScheduleLengthWeeks] = useState(1)
+  const [visibleWeekIndex, setVisibleWeekIndex] = useState(0)
   const [catalogEpisodes, setCatalogEpisodes] = useState<Episode[]>([])
   const [, setCatalogStatus] = useState('Loading normalized content...')
   const [contentMenuOpen, setContentMenuOpen] = useState(false)
@@ -322,7 +325,7 @@ export default function SchedulerApp({
   const contentInputRef = useRef<HTMLInputElement | null>(null)
 
   const availableEpisodes = catalogEpisodes.length ? catalogEpisodes : SAMPLE_EPISODES
-  const selectedRangeDurations = selectedRanges.map((range) => minutesBetween(range.start, range.end))
+  const selectedRangeDurations = useMemo(() => selectedRanges.map((range) => minutesBetween(range.start, range.end)), [selectedRanges])
   const selectedSlotMinutes = selectedRangeDurations.length ? Math.min(...selectedRangeDurations) : null
   const selectableEpisodes = useMemo(
     () =>
@@ -351,25 +354,42 @@ export default function SchedulerApp({
   const selectedRange = selectedRanges[0] || null
   const selectedLastRange = selectedRanges[selectedRanges.length - 1] || null
   const previewRanges = liveSelectionRanges.length ? liveSelectionRanges : selectedRanges
-  const selectedSlotEvents = previewRanges.map((range, index): EventInput => ({
-    id: `selected-slot-${index}`,
-    start: isoLocal(range.start),
-    end: isoLocal(range.end),
-    display: 'background',
-    classNames: ['selected-time-slot-event'],
-  }))
-  const events = [...blocks.map(eventFromBlock), ...selectedSlotEvents]
-  const selectedBlockIdSet = useMemo(() => new Set(selectedBlockIds), [selectedBlockIds])
-  const calendarStart = useMemo(() => {
+  const baseCalendarStart = useMemo(() => {
     const base = new Date(`${startDate}T00:00:00`)
     const targetDay = dayIndexByName[firstDayOfWeek] ?? 1
     const diff = (base.getDay() - targetDay + 7) % 7
     return addMinutes(base, -diff * 24 * 60)
   }, [firstDayOfWeek, startDate])
+  const calendarStart = useMemo(() => addMinutes(baseCalendarStart, visibleWeekIndex * 7 * 24 * 60), [baseCalendarStart, visibleWeekIndex])
+  const calendarEnd = useMemo(() => addMinutes(calendarStart, 7 * 24 * 60), [calendarStart])
+  const scheduleWeekStarts = useMemo(
+    () => Array.from({ length: scheduleLengthWeeks }, (_, index) => addMinutes(baseCalendarStart, index * 7 * 24 * 60)),
+    [baseCalendarStart, scheduleLengthWeeks],
+  )
+  const visibleBlocks = useMemo(
+    () =>
+      blocks.filter((block) => {
+        const blockStart = new Date(block.start)
+        const blockEnd = new Date(block.end)
+        return blockStart < calendarEnd && blockEnd > calendarStart
+      }),
+    [blocks, calendarEnd, calendarStart],
+  )
+  const events = useMemo(() => {
+    const selectedSlotEvents = previewRanges.map((range, index): EventInput => ({
+      id: `selected-slot-${index}`,
+      start: isoLocal(range.start),
+      end: isoLocal(range.end),
+      display: 'background',
+      classNames: ['selected-time-slot-event'],
+    }))
+    return [...visibleBlocks.map(eventFromBlock), ...selectedSlotEvents]
+  }, [previewRanges, visibleBlocks])
+  const selectedBlockIdSet = useMemo(() => new Set(selectedBlockIds), [selectedBlockIds])
   const firstDayIndex = dayIndexByName[firstDayOfWeek] ?? 1
 
   const totals = useMemo(() => {
-    const totalMinutes = 7 * 24 * 60
+    const totalMinutes = scheduleLengthWeeks * 7 * 24 * 60
     const filledMinutes = blocks.reduce(
       (acc, block) => acc + minutesBetween(new Date(block.start), new Date(block.end)),
       0,
@@ -382,7 +402,7 @@ export default function SchedulerApp({
       byGenre.set(block.genre || 'unlabeled', (byGenre.get(block.genre || 'unlabeled') || 0) + mins)
     }
     return { totalMinutes, filledMinutes, byType, byGenre }
-  }, [blocks])
+  }, [blocks, scheduleLengthWeeks])
 
   useEffect(() => {
     let cancelled = false
@@ -403,6 +423,17 @@ export default function SchedulerApp({
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    setVisibleWeekIndex((index) => Math.min(index, scheduleLengthWeeks - 1))
+  }, [scheduleLengthWeeks])
+
+  useEffect(() => {
+    setVisibleWeekIndex(0)
+    setSelectedRanges([])
+    setLiveSelectionRanges([])
+    setSelectedBlockIds([])
+  }, [baseCalendarStart])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -547,30 +578,36 @@ export default function SchedulerApp({
           method: 'POST',
           body: JSON.stringify({ blocks: payloadBlocks }),
         }),
-        fetchJson<{ missing_slot_count: number }>('/api/schedule/blocks-to-grid', {
-          method: 'POST',
-          body: JSON.stringify({
-            week_monday: calendarStart.toISOString().slice(0, 10),
-            blocks: payloadBlocks,
-            require_complete: false,
-          }),
-        }),
+        Promise.all(
+          scheduleWeekStarts.map((weekStart) =>
+            fetchJson<{ missing_slot_count: number }>('/api/schedule/blocks-to-grid', {
+              method: 'POST',
+              body: JSON.stringify({
+                week_monday: weekStart.toISOString().slice(0, 10),
+                blocks: payloadBlocks,
+                require_complete: false,
+              }),
+            }),
+          ),
+        ),
       ])
+      const missingSlotTotal = gridPayload.reduce((total, payload) => total + payload.missing_slot_count, 0)
       setSuggestedRules(rulesPayload.rules || [])
-      setMissingSlotCount(gridPayload.missing_slot_count)
-      const missingText = `${gridPayload.missing_slot_count.toLocaleString()} empty half-hour slot${
-        gridPayload.missing_slot_count === 1 ? '' : 's'
+      setMissingSlotCount(missingSlotTotal)
+      const missingText = `${missingSlotTotal.toLocaleString()} empty half-hour slot${
+        missingSlotTotal === 1 ? '' : 's'
       }`
       const ruleText = `${rulesPayload.rule_count} rule suggestion${rulesPayload.rule_count === 1 ? '' : 's'}`
       setGenerateStatus(
         `Draft analyzed: ${rulesPayload.rule_count} rule suggestion${rulesPayload.rule_count === 1 ? '' : 's'} found.`,
       )
-      if (gridPayload.missing_slot_count === 0) {
+      if (missingSlotTotal === 0) {
         const savePayload = await fetchJson<{ label: string; path: string }>('/api/base-schedules/save', {
           method: 'POST',
           body: JSON.stringify({
             station_id: stationId || '',
-            week_monday: calendarStart.toISOString().slice(0, 10),
+            week_monday: baseCalendarStart.toISOString().slice(0, 10),
+            week_count: scheduleLengthWeeks,
             blocks: payloadBlocks,
             suggested_rules: rulesPayload.rules || [],
           }),
@@ -634,21 +671,42 @@ export default function SchedulerApp({
         </label>
         <label>
           Schedule length
-          <select defaultValue="1 week">
-            <option>1 week</option>
-            <option>2 weeks</option>
-            <option>4 weeks</option>
+          <select value={scheduleLengthWeeks} onChange={(event) => setScheduleLengthWeeks(Number(event.target.value))}>
+            <option value={1}>1 week</option>
+            <option value={2}>2 weeks</option>
+            <option value={4}>4 weeks</option>
           </select>
         </label>
       </section>
 
       <section className="workspace">
         <div className="calendar-card">
+          {scheduleLengthWeeks > 1 ? (
+            <div className="week-nav">
+              <button
+                type="button"
+                onClick={() => setVisibleWeekIndex((index) => Math.max(0, index - 1))}
+                disabled={visibleWeekIndex === 0}
+              >
+                ←
+              </button>
+              <span>
+                Week {visibleWeekIndex + 1} of {scheduleLengthWeeks}
+              </span>
+              <button
+                type="button"
+                onClick={() => setVisibleWeekIndex((index) => Math.min(scheduleLengthWeeks - 1, index + 1))}
+                disabled={visibleWeekIndex >= scheduleLengthWeeks - 1}
+              >
+                →
+              </button>
+            </div>
+          ) : null}
           <FullCalendar
             plugins={[timeGridPlugin, interactionPlugin]}
             initialView="timeGridWeek"
             initialDate={calendarStart}
-            key={`${startDate}-${firstDayOfWeek}`}
+            key={`${startDate}-${firstDayOfWeek}-${visibleWeekIndex}`}
             firstDay={firstDayIndex}
             headerToolbar={false}
             allDaySlot={false}
@@ -665,7 +723,8 @@ export default function SchedulerApp({
             selectAllow={handleSelectAllow}
             select={handleSelect}
             eventClick={handleEventClick}
-            height="auto"
+            height="72vh"
+            expandRows={false}
             nowIndicator={false}
             dayHeaderContent={(arg) => (
               <div className="day-header">
