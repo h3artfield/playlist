@@ -15,6 +15,17 @@ python -m pip install --upgrade pip
 python -m pip install -r "$Root\requirements.txt"
 python -m pip install pyinstaller
 
+if (Test-Path "$Root\scheduler-ui\package.json") {
+    Push-Location "$Root\scheduler-ui"
+    if (Test-Path "package-lock.json") {
+        npm ci
+    } else {
+        npm install
+    }
+    npm run build
+    Pop-Location
+}
+
 $args = @(
     "--noconfirm",
     "--clean",
@@ -25,6 +36,7 @@ $args = @(
     "--add-data", "config;config",
     "--add-data", "data;data",
     "--add-data", "cloud;cloud",
+    "--add-data", "scheduler-ui\dist;scheduler-ui\dist",
     "--collect-all", "streamlit",
     "--collect-all", "pandas",
     "--collect-all", "openpyxl",

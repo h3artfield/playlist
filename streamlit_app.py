@@ -94,18 +94,34 @@ def _write_fresh_blank_schedule_config(source_cfg_path: Path) -> Path:
     """Create a fresh no-weeks base schedule for the Blank Schedule builder."""
     out_path = _fresh_blank_schedule_path()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        raw = yaml.safe_load(source_cfg_path.read_text(encoding="utf-8"))
-    except Exception:
-        raw = None
-    if not isinstance(raw, dict):
-        raw = {}
+
+    def load_raw(path: Path) -> dict[str, Any]:
+        try:
+            val = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return val if isinstance(val, dict) else {}
+
+    raw = load_raw(source_cfg_path)
+    # Cloud/blank configs may intentionally have no shows. For the scratch builder,
+    # seed known show metadata from the production template so durations like
+    # 21 Jump Street's 60-minute rows are preserved.
+    if not isinstance(raw.get("shows"), dict) or not raw.get("shows"):
+        fallback = load_raw(Path("config") / "april_2026.yaml")
+        if isinstance(fallback.get("shows"), dict) and fallback.get("shows"):
+            raw = fallback
+
     blank = dict(raw)
     blank.setdefault("gracenote_binge_id", 0)
     blank.setdefault("nikki_workbook", "../data/2024 Nikki Spreadsheets.xlsx")
     blank.setdefault("timezone_note", "local")
     blank.setdefault("wrap_episodes", True)
     blank.setdefault("shows", {})
+    blank["schedule_builder"] = {
+        "managed": True,
+        "kind": "base_schedule",
+        "source": "blank_schedule_builder",
+    }
     blank["weeks"] = []
     blank["cursor_state_file"] = "episode_cursors_blank_schedule.json"
     for key in (
@@ -134,6 +150,7 @@ def _render_desktop_download_cta() -> None:
             current = Path(str(st.session_state.get("main_setup_yaml") or _default_config_display()))
             blank_path = _write_fresh_blank_schedule_config(current)
             st.session_state["main_setup_yaml"] = blank_path.as_posix()
+            st.session_state["blank_schedule_builder_active"] = True
             st.session_state[_schedule_origin_mode_key(blank_path)] = "create_new"
             st.session_state[_MAIN_NAV_PENDING_KEY] = _NAV_BUILD
             for k in list(st.session_state.keys()):
@@ -632,6 +649,10 @@ def _render_top_nav() -> str:
             current = str(st.session_state.get("main_setup_yaml", "")).strip()
             opts = list(base_choices) + [custom_opt]
             default_idx = opts.index(current) if current in opts else len(opts) - 1
+            # Keep program/show picker reruns from snapping the active setup back to
+            # the previous base schedule widget value.
+            if current in opts and st.session_state.get("main_base_schedule_pick") != current:
+                st.session_state["main_base_schedule_pick"] = current
             pick = st.selectbox(
                 "Base schedule version",
                 opts,
@@ -1219,6 +1240,146 @@ def _next_empty_schedule_slot_key(
     return None
 
 
+def _schedule_slot_key(row: dict[str, Any]) -> str:
+    return f"{row['_day_index']}|{row['_slot']}"
+
+
+def _schedule_program_start_key_for_slot(filled_rows: list[dict[str, Any]], slot_key: str) -> Optional[str]:
+    idx = next((i for i, r in enumerate(filled_rows) if _schedule_slot_key(r) == slot_key), None)
+    if idx is None:
+        return None
+    filled = str(filled_rows[idx].get("Filled schedule") or "").strip()
+    if not filled:
+        return None
+    for j in range(idx, -1, -1):
+        row = filled_rows[j]
+        if str(row.get("Filled schedule") or "").strip() != filled:
+            break
+        if str(row.get("Program") or "").strip():
+            return _schedule_slot_key(row)
+    return None
+
+
+def _selected_schedule_rows(base_rows: list[dict[str, Any]], selected_keys: set[str]) -> list[dict[str, Any]]:
+    rows = [r for r in base_rows if _schedule_slot_key(r) in selected_keys]
+    rows.sort(key=lambda r: int(r.get("_order", 0)))
+    return rows
+
+
+def _apply_sequence_to_selected_cells(
+    assignments: dict[str, str],
+    selected_rows: list[dict[str, Any]],
+    episode_options: list[str],
+    starting_episode: str,
+    duration_by_display: dict[str, int],
+) -> int:
+    if not selected_rows or not episode_options or starting_episode not in episode_options:
+        return 0
+    ep_idx = episode_options.index(starting_episode)
+    row_idx = 0
+    applied = 0
+    while row_idx < len(selected_rows) and ep_idx < len(episode_options):
+        episode = episode_options[ep_idx]
+        start_key = _schedule_slot_key(selected_rows[row_idx])
+        assignments[start_key] = episode
+        applied += 1
+        slots = max(1, (int(duration_by_display.get(episode, 30)) + 29) // 30)
+        row_idx += slots
+        ep_idx += 1
+    return applied
+
+
+def _render_blank_schedule_canvas(filled_rows: list[dict[str, Any]]) -> None:
+    """Clickable schedule canvas for the blank builder."""
+    st.markdown(
+        """
+        <style>
+        .schedule-grid-header {
+            font-weight: 700;
+            color: rgba(250, 250, 250, 0.82);
+            padding: 0.35rem 0;
+            text-align: center;
+        }
+        .schedule-grid-time {
+            color: rgba(250, 250, 250, 0.68);
+            font-size: 0.82rem;
+            padding-top: 0.72rem;
+            white-space: nowrap;
+        }
+        div[data-testid="stButton"] > button[kind="secondary"],
+        div[data-testid="stButton"] > button[kind="primary"] {
+            min-height: 5.25rem;
+            border-radius: 0.65rem;
+            justify-content: center;
+            text-align: center;
+            white-space: normal;
+            overflow: hidden;
+            font-size: 0.76rem;
+            line-height: 1.12rem;
+            padding: 0.45rem 0.35rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    day_order: list[str] = []
+    for row in filled_rows:
+        day = str(row.get("Day") or "")
+        if day and day not in day_order:
+            day_order.append(day)
+    if not day_order:
+        return
+    selected_cells_raw = st.session_state.get("create_schedule_selected_cells", [])
+    if not isinstance(selected_cells_raw, list):
+        selected_cells_raw = []
+    selected_cells = {str(x) for x in selected_cells_raw}
+    row_by_day_slot = {
+        (str(r.get("Day") or ""), int(r.get("_slot", 0))): r
+        for r in filled_rows
+    }
+
+    header_cols = st.columns([0.65] + [1] * len(day_order), gap="small")
+    with header_cols[0]:
+        st.markdown("<div class='schedule-grid-header'>Time</div>", unsafe_allow_html=True)
+    for col, day in zip(header_cols[1:], day_order):
+        with col:
+            st.markdown(f"<div class='schedule-grid-header'>{day[:3]}</div>", unsafe_allow_html=True)
+
+    for slot in range(48):
+        cols = st.columns([0.65] + [1] * len(day_order), gap="small")
+        with cols[0]:
+            st.markdown(f"<div class='schedule-grid-time'>{slot_label(slot)}</div>", unsafe_allow_html=True)
+        for col, day in zip(cols[1:], day_order):
+            with col:
+                r = row_by_day_slot.get((day, slot))
+                if r is None:
+                    st.empty()
+                    continue
+                key = _schedule_slot_key(r)
+                program = str(r.get("Program") or "").strip()
+                filled = str(r.get("Filled schedule") or "").strip()
+                is_selected = key in selected_cells
+                marker = "● " if is_selected else ""
+                if program:
+                    label = f"{marker}{program}"
+                elif filled:
+                    label = f"{marker}{filled}"
+                else:
+                    label = f"{marker}·"
+                if st.button(
+                    label,
+                    key=f"create_schedule_cell_btn_{key}",
+                    use_container_width=True,
+                    type="primary" if is_selected else "secondary",
+                ):
+                    if key in selected_cells:
+                        selected_cells.remove(key)
+                    else:
+                        selected_cells.add(key)
+                    st.session_state["create_schedule_selected_cells"] = sorted(selected_cells)
+                    st.rerun()
+
+
 def _program_show_name(program: str) -> str:
     return str(program or "").split(" - ", 1)[0].strip() or "Unlabeled"
 
@@ -1413,31 +1574,36 @@ def _needs_schedule_origin_gate(cfg, cfg_path: Path) -> bool:
     return not bool(cfg.weeks)
 
 
-def _render_schedule_origin_gate(cfg, cfg_path: Path) -> bool:
+def _render_schedule_origin_gate(cfg, cfg_path: Path, *, blank_only: bool = False) -> bool:
     """First-time setup for stations with no weeks in YAML. Returns True when build UI may continue."""
     mode_key = _schedule_origin_mode_key(cfg_path)
-    st.markdown("##### New station setup")
-    st.caption(
-        "Choose how to start. **Import existing** loads BINGE + GRIDS you already have. "
-        "**Create new** sets up blank week tabs in a grids workbook so you can build from scratch."
-    )
-    origin = st.radio(
-        "Starting point",
-        ("Create new schedule", "Import existing schedule"),
-        horizontal=True,
-        key="schedule_origin_radio",
-        label_visibility="collapsed",
-    )
-    if origin == "Create new schedule":
+    if blank_only:
         st.session_state[mode_key] = "create_new"
+        st.markdown("##### Schedule Setup")
+        st.caption("Choose the schedule start, then highlight/fill programming blocks from Available Content.")
     else:
-        st.session_state[mode_key] = "import_existing"
+        st.markdown("##### New station setup")
+        st.caption(
+            "Choose how to start. **Import existing** loads BINGE + GRIDS you already have. "
+            "**Create new** sets up blank week tabs in a grids workbook so you can build from scratch."
+        )
+        origin = st.radio(
+            "Starting point",
+            ("Create new schedule", "Import existing schedule"),
+            horizontal=True,
+            key="schedule_origin_radio",
+            label_visibility="collapsed",
+        )
+        if origin == "Create new schedule":
+            st.session_state[mode_key] = "create_new"
+        else:
+            st.session_state[mode_key] = "import_existing"
 
     data_dir = _station_schedule_data_dir(cfg_path)
     rel_grids = _yaml_path_relative_to_config(cfg_path, data_dir / "BINGE GRIDS.xlsx")
     rel_binge = _yaml_path_relative_to_config(cfg_path, data_dir / "BINGE.xlsx")
 
-    if st.session_state[mode_key] == "import_existing":
+    if not blank_only and st.session_state[mode_key] == "import_existing":
         st.markdown("Upload your station’s current **BINGE.xlsx** and **BINGE GRIDS.xlsx**.")
         up_binge = st.file_uploader("BINGE workbook", type=["xlsx"], key="import_schedule_binge")
         up_grids = st.file_uploader("BINGE GRIDS workbook", type=["xlsx"], key="import_schedule_grids")
@@ -1523,86 +1689,15 @@ def _render_schedule_origin_gate(cfg, cfg_path: Path) -> bool:
     if content_names:
         st.markdown("###### Weekly schedule template")
         st.caption(
-            "Pick the half-hour where the program starts, choose the show, then choose the indexed episode on the right. "
-            "The preview carries the selection through its duration."
+            "Click cells in the grid to highlight a block, then choose a show and starting episode. "
+            "The builder fills the selected block in episode order."
         )
         base_rows = _new_schedule_template_rows(first_day_idx, first_hour)
         assignment_key = f"create_schedule_assignments_{first_day_idx}_{first_hour}"
         if assignment_key not in st.session_state or not isinstance(st.session_state.get(assignment_key), dict):
             st.session_state[assignment_key] = {}
         assignments: dict[str, str] = st.session_state[assignment_key]
-        row_by_slot_key = {
-            f"{r['_day_index']}|{r['_slot']}": r
-            for r in base_rows
-        }
-        slot_options = list(row_by_slot_key.keys())
-        slot_label_by_key = {
-            k: f"{v['Day']} {v['Time']}"
-            for k, v in row_by_slot_key.items()
-        }
-        pending_slot_key = st.session_state.pop("create_schedule_next_slot", None)
-        if pending_slot_key in slot_options:
-            st.session_state["create_schedule_pick_slot"] = pending_slot_key
         show_groups = _show_episode_groups_for_new_schedule(content_names)
-        slot_col, show_col, episode_col = st.columns([1.2, 1.4, 2.4])
-        with slot_col:
-            slot_key = st.selectbox(
-                "Start time",
-                slot_options,
-                format_func=lambda k: slot_label_by_key.get(str(k), str(k)),
-                key="create_schedule_pick_slot",
-            )
-        with show_col:
-            show_name = st.selectbox(
-                "Show",
-                list(show_groups.keys()),
-                key="create_schedule_pick_show",
-            )
-        episode_options = show_groups.get(str(show_name), [])
-        prev_episode_key = "create_schedule_pick_episode_prev_show"
-        if st.session_state.get(prev_episode_key) != show_name:
-            for k in list(st.session_state.keys()):
-                if str(k).startswith("create_schedule_pick_episode_"):
-                    st.session_state.pop(k, None)
-            st.session_state[prev_episode_key] = show_name
-        with episode_col:
-            episode_choice = st.selectbox(
-                "Episode",
-                episode_options,
-                key=f"create_schedule_pick_episode_{show_name}",
-                format_func=lambda v: str(v).split(" - ", 1)[1] if " - " in str(v) else str(v),
-            )
-        c_apply, c_clear, c_clear_all = st.columns(3)
-        with c_apply:
-            if st.button("Add to template", type="primary", use_container_width=True, key="create_schedule_add_assignment"):
-                assignments[str(slot_key)] = str(episode_choice)
-                st.session_state[assignment_key] = assignments
-                st.session_state.pop("create_schedule_confirm_incomplete", None)
-                next_rows = []
-                for r in base_rows:
-                    rr = dict(r)
-                    rr["Program"] = assignments.get(f"{r['_day_index']}|{r['_slot']}", "")
-                    next_rows.append(rr)
-                next_filled_rows = _filled_new_schedule_rows(next_rows, duration_by_display)
-                next_slot = _next_empty_schedule_slot_key(
-                    next_filled_rows,
-                    after_slot_key=str(slot_key),
-                    slot_options=slot_options,
-                )
-                if next_slot is not None:
-                    st.session_state["create_schedule_next_slot"] = next_slot
-                st.rerun()
-        with c_clear:
-            if st.button("Clear this slot", use_container_width=True, key="create_schedule_clear_assignment"):
-                assignments.pop(str(slot_key), None)
-                st.session_state[assignment_key] = assignments
-                st.session_state.pop("create_schedule_confirm_incomplete", None)
-                st.rerun()
-        with c_clear_all:
-            if st.button("Clear all", use_container_width=True, key="create_schedule_clear_all_assignments"):
-                st.session_state[assignment_key] = {}
-                st.session_state.pop("create_schedule_confirm_incomplete", None)
-                st.rerun()
 
         edited_rows = []
         for r in base_rows:
@@ -1611,13 +1706,85 @@ def _render_schedule_origin_gate(cfg, cfg_path: Path) -> bool:
             edited_rows.append(rr)
         filled_rows = _filled_new_schedule_rows(edited_rows, duration_by_display)
         filled_count = sum(1 for r in filled_rows if str(r.get("Filled schedule") or "").strip())
-        preview_df = pd.DataFrame(filled_rows)[["Day", "Time", "Program", "Filled schedule"]]
-        st.dataframe(
-            preview_df,
-            use_container_width=True,
-            hide_index=True,
-            height=420,
-        )
+        _render_blank_schedule_canvas(filled_rows)
+        selected_raw = st.session_state.get("create_schedule_selected_cells", [])
+        selected_keys = {str(x) for x in selected_raw} if isinstance(selected_raw, list) else set()
+        selected_rows = _selected_schedule_rows(base_rows, selected_keys)
+        st.caption(f"Selected cells: **{len(selected_rows)}**")
+
+        fill_col, ep_col = st.columns([1.4, 2.1])
+        with fill_col:
+            show_name = st.selectbox(
+                "Type show name",
+                list(show_groups.keys()),
+                key="create_schedule_pick_show",
+                help="Click selected cells in the grid, then type here to autocomplete the show.",
+            )
+        episode_options = show_groups.get(str(show_name), [])
+        prev_episode_key = "create_schedule_pick_episode_prev_show"
+        if st.session_state.get(prev_episode_key) != show_name:
+            for k in list(st.session_state.keys()):
+                if str(k).startswith("create_schedule_pick_episode_"):
+                    st.session_state.pop(k, None)
+            st.session_state[prev_episode_key] = show_name
+        with ep_col:
+            episode_choice = st.selectbox(
+                "Starting episode",
+                episode_options,
+                key=f"create_schedule_pick_episode_{show_name}",
+                format_func=lambda v: str(v).split(" - ", 1)[1] if " - " in str(v) else str(v),
+            )
+
+        c_fill, c_delete, c_clear_sel, c_clear_all = st.columns(4)
+        with c_fill:
+            if st.button(
+                "Fill selected block",
+                type="primary",
+                use_container_width=True,
+                key="create_schedule_fill_selected_block",
+                disabled=not bool(selected_rows),
+            ):
+                applied = _apply_sequence_to_selected_cells(
+                    assignments,
+                    selected_rows,
+                    episode_options,
+                    str(episode_choice),
+                    duration_by_display,
+                )
+                st.session_state[assignment_key] = assignments
+                st.session_state.pop("create_schedule_confirm_incomplete", None)
+                st.toast(f"Filled {applied} program start(s).")
+                st.rerun()
+        with c_delete:
+            if st.button(
+                "Delete selected",
+                use_container_width=True,
+                key="create_schedule_delete_selected_cells",
+                disabled=not bool(selected_rows),
+            ):
+                start_keys = {
+                    k
+                    for k in (
+                        _schedule_program_start_key_for_slot(filled_rows, _schedule_slot_key(r))
+                        for r in selected_rows
+                    )
+                    if k
+                }
+                for k in start_keys:
+                    assignments.pop(k, None)
+                st.session_state[assignment_key] = assignments
+                st.session_state.pop("create_schedule_confirm_incomplete", None)
+                st.rerun()
+        with c_clear_sel:
+            if st.button("Clear selection", use_container_width=True, key="create_schedule_clear_selection"):
+                st.session_state["create_schedule_selected_cells"] = []
+                st.rerun()
+        with c_clear_all:
+            if st.button("Clear all", use_container_width=True, key="create_schedule_clear_all_assignments"):
+                st.session_state[assignment_key] = {}
+                st.session_state["create_schedule_selected_cells"] = []
+                st.session_state.pop("create_schedule_confirm_incomplete", None)
+                st.rerun()
         empty_count = max(0, len(filled_rows) - filled_count)
         st.caption(f"Filled preview: **{filled_count}** half-hour slot(s). Empty: **{empty_count}**.")
         if filled_count:
@@ -5292,6 +5459,11 @@ def _render_build_schedule(cfg, cfg_path: Path, nikki: Path) -> None:
         _render_binge_grids_preview(key_prefix="build", show_swap=False)
 
 
+def _render_blank_schedule_builder_page(cfg, cfg_path: Path) -> None:
+    st.header("Blank Schedule Builder")
+    _render_schedule_origin_gate(cfg, cfg_path, blank_only=True)
+
+
 def main() -> None:
     st.set_page_config(
         page_title="Schedule Builder",
@@ -5313,7 +5485,12 @@ def main() -> None:
     cfg = load_build_config(cfg_path)
     nikki_path = resolved_nikki_workbook_path(cfg)
 
-    if page == _NAV_ARCHIVE:
+    if page != _NAV_BUILD:
+        st.session_state.pop("blank_schedule_builder_active", None)
+
+    if page == _NAV_BUILD and st.session_state.get("blank_schedule_builder_active"):
+        _render_blank_schedule_builder_page(cfg, cfg_path)
+    elif page == _NAV_ARCHIVE:
         _render_content_archive(cfg, cfg_path, nikki_path)
     elif page == _NAV_EDIT_SCHEDULE:
         st.header(_NAV_EDIT_SCHEDULE)

@@ -9,7 +9,9 @@ from __future__ import annotations
 import contextlib
 import os
 import sys
+import threading
 import traceback
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 
@@ -76,10 +78,48 @@ def _resolve_app_script() -> Path:
     )
 
 
+def _resolve_react_dist() -> Path | None:
+    here = Path(__file__).resolve().parent
+    exe_dir = Path(sys.executable).resolve().parent
+    meipass = Path(getattr(sys, "_MEIPASS", "")) if getattr(sys, "_MEIPASS", None) else None
+    candidates = [
+        here / "scheduler-ui" / "dist",
+        exe_dir / "scheduler-ui" / "dist",
+        exe_dir / "_internal" / "scheduler-ui" / "dist",
+    ]
+    if meipass is not None:
+        candidates.append(meipass / "scheduler-ui" / "dist")
+    for p in candidates:
+        if (p / "index.html").is_file():
+            return p
+    return None
+
+
+def _resource_root_for_react_dist(dist_path: Path) -> Path:
+    # scheduler-ui/dist sits under the resource root in source and PyInstaller builds.
+    return dist_path.parent.parent
+
+
 def main() -> int:
     log_path = _logs_dir() / f"startup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
     with log_path.open("w", encoding="utf-8") as logf:
         try:
+            react_dist = _resolve_react_dist()
+            if react_dist is not None:
+                import uvicorn
+
+                root = _resource_root_for_react_dist(react_dist)
+                os.chdir(root)
+                logf.write(f"Resolved React UI path: {react_dist}\n")
+                logf.write(f"Working directory: {root}\n")
+                os.environ.setdefault("SCHEDULE_BUILDER_DESKTOP_RUNTIME", "1")
+                os.environ.setdefault("SCHEDULE_BUILDER_REACT_DIST", str(react_dist))
+                url = "http://127.0.0.1:8765"
+                threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+                with contextlib.redirect_stdout(logf), contextlib.redirect_stderr(logf):
+                    uvicorn.run("binge_schedule.api:app", host="127.0.0.1", port=8765, log_level="info")
+                return 0
+
             app_path = _resolve_app_script()
             logf.write(f"Resolved app path: {app_path}\n")
             os.chdir(app_path.parent)

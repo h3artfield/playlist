@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 import typer
 
+from binge_schedule.content_catalog import canonical_rows_from_config, write_canonical_catalog
 from binge_schedule.config_io import load_build_config
 from binge_schedule.export_xlsx import export_both, is_verbose_seed_noise
 
@@ -67,6 +69,48 @@ def build(
             typer.echo(s)
     for w in warnings:
         typer.echo(f"Warning: {w}", err=True)
+
+
+@app.command()
+def catalog(
+    config: Path = typer.Option(
+        Path("config/april_2026.yaml"),
+        "--config",
+        "-c",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="YAML build config whose content rules should be normalized.",
+    ),
+    out: Path = typer.Option(
+        Path("scheduler-ui/public/content-catalog.json"),
+        "--out",
+        "-o",
+        help="JSON output path for the normalized content table.",
+    ),
+    station_id: str = typer.Option(
+        "",
+        "--station-id",
+        help="Optional station/catalog identifier. Defaults to the config file stem.",
+    ),
+) -> None:
+    """Normalize configured content into the canonical content table JSON."""
+    cfg = load_build_config(config)
+    rows = canonical_rows_from_config(cfg, station_id=station_id.strip() or None)
+    out_path = write_canonical_catalog(rows, out)
+    typer.echo(f"Wrote {len(rows)} normalized content rows to {out_path}")
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host", help="Host for the local API server."),
+    port: int = typer.Option(8765, "--port", help="Port for the local API server."),
+    reload: bool = typer.Option(False, "--reload", help="Enable uvicorn reload for development."),
+) -> None:
+    """Run the local API used by the React scheduler UI."""
+    import uvicorn
+
+    uvicorn.run("binge_schedule.api:app", host=host, port=port, reload=reload)
 
 
 def main() -> None:
