@@ -177,6 +177,17 @@ const dayIndexByName: Record<string, number> = {
   Saturday: 6,
 }
 
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+const START_TIME_OPTIONS = Array.from({ length: 24 }, (_, hour) => {
+  const displayHour = hour % 12 || 12
+  const suffix = hour < 12 ? 'AM' : 'PM'
+  return {
+    value: String(hour),
+    label: `${displayHour} ${suffix}`,
+  }
+})
+
 function isoLocal(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`
@@ -228,6 +239,17 @@ function normalizeSelection(start: Date, end: Date): TimeRange[] {
     day = addMinutes(day, 24 * 60)
   }
   return ranges
+}
+
+function sameTimeRanges(a: TimeRange[], b: TimeRange[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((range, index) => range.start.getTime() === b[index].start.getTime() && range.end.getTime() === b[index].end.getTime())
+  )
+}
+
+function selectionTouchesBottomPadding(start: Date, end: Date): boolean {
+  return !sameLocalDay(start, end) && minutesOfDay(end) > 0
 }
 
 function colorForShow(show: string): string {
@@ -311,6 +333,7 @@ export default function SchedulerApp({
   const [contentMode, setContentMode] = useState<'series' | 'movies'>('series')
   const [startDate, setStartDate] = useState('2026-05-18')
   const [firstDayOfWeek, setFirstDayOfWeek] = useState('Monday')
+  const [startTimeHour, setStartTimeHour] = useState(0)
   const [scheduleLengthWeeks, setScheduleLengthWeeks] = useState(1)
   const [visibleWeekIndex, setVisibleWeekIndex] = useState(0)
   const [catalogEpisodes, setCatalogEpisodes] = useState<Episode[]>([])
@@ -387,6 +410,7 @@ export default function SchedulerApp({
   }, [previewRanges, visibleBlocks])
   const selectedBlockIdSet = useMemo(() => new Set(selectedBlockIds), [selectedBlockIds])
   const firstDayIndex = dayIndexByName[firstDayOfWeek] ?? 1
+  const calendarScrollTime = `${String(startTimeHour).padStart(2, '0')}:00:00`
 
   const totals = useMemo(() => {
     const totalMinutes = scheduleLengthWeeks * 7 * 24 * 60
@@ -538,8 +562,19 @@ export default function SchedulerApp({
     setContentMenuOpen(false)
   }
 
+  function changeStartDate(nextDate: string) {
+    setStartDate(nextDate)
+    const parsed = new Date(`${nextDate}T00:00:00`)
+    if (!Number.isNaN(parsed.getTime())) {
+      setFirstDayOfWeek(DAY_NAMES[parsed.getDay()])
+    }
+  }
+
   function handleSelectAllow(arg: { start: Date; end: Date }) {
-    setLiveSelectionRanges(normalizeSelection(arg.start, arg.end))
+    if (selectionTouchesBottomPadding(arg.start, arg.end)) return false
+    const normalized = normalizeSelection(arg.start, arg.end)
+    const preview = normalized.length > 1 ? normalized : []
+    setLiveSelectionRanges((prev) => (sameTimeRanges(prev, preview) ? prev : preview))
     return true
   }
 
@@ -654,20 +689,26 @@ export default function SchedulerApp({
 
       <section className="setup-card">
         <label>
+          Start date
+          <input type="date" value={startDate} onChange={(event) => changeStartDate(event.target.value)} />
+        </label>
+        <label>
           First day of week
           <select value={firstDayOfWeek} onChange={(event) => setFirstDayOfWeek(event.target.value)}>
-            <option>Monday</option>
-            <option>Tuesday</option>
-            <option>Wednesday</option>
-            <option>Thursday</option>
-            <option>Friday</option>
-            <option>Saturday</option>
-            <option>Sunday</option>
+            {DAY_NAMES.map((day) => (
+              <option key={day}>{day}</option>
+            ))}
           </select>
         </label>
         <label>
-          Start date
-          <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+          Start time
+          <select value={startTimeHour} onChange={(event) => setStartTimeHour(Number(event.target.value))}>
+            {START_TIME_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           Schedule length
@@ -680,7 +721,7 @@ export default function SchedulerApp({
       </section>
 
       <section className="workspace">
-        <div className="calendar-card">
+        <div className={`calendar-card${liveSelectionRanges.length > 1 ? ' is-normalized-drag' : ''}`}>
           {scheduleLengthWeeks > 1 ? (
             <div className="week-nav">
               <button
@@ -706,7 +747,7 @@ export default function SchedulerApp({
             plugins={[timeGridPlugin, interactionPlugin]}
             initialView="timeGridWeek"
             initialDate={calendarStart}
-            key={`${startDate}-${firstDayOfWeek}-${visibleWeekIndex}`}
+            key={`${startDate}-${firstDayOfWeek}-${visibleWeekIndex}-${startTimeHour}`}
             firstDay={firstDayIndex}
             headerToolbar={false}
             allDaySlot={false}
@@ -726,6 +767,8 @@ export default function SchedulerApp({
             height="72vh"
             expandRows={false}
             nowIndicator={false}
+            scrollTime={calendarScrollTime}
+            scrollTimeReset={false}
             dayHeaderContent={(arg) => (
               <div className="day-header">
                 <strong>{arg.date.toLocaleDateString([], { weekday: 'short' })}</strong>
@@ -738,7 +781,7 @@ export default function SchedulerApp({
               </div>
             )}
             slotMinTime="00:00:00"
-            slotMaxTime="24:00:00"
+            slotMaxTime="24:30:00"
           />
         </div>
 
