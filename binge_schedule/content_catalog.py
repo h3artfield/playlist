@@ -89,7 +89,7 @@ def _base_row(
     content_type: str,
     series_key: str,
     display_name: str,
-    runtime_minutes: Optional[int],
+    runtime_minutes: Optional[float],
     genre: str,
     semantic_group: str,
     source_file: str,
@@ -170,14 +170,16 @@ def _row_from_episode(
     idx0: int,
     workbook_path: Path,
     style: str,
+    runtime_minutes: Optional[float] = None,
 ) -> dict[str, Any]:
     season, ep_in_season = season_episode_parts(ep, style)
+    runtime = runtime_minutes if runtime_minutes is not None else sd.binge_row_minutes
     row = _base_row(
         station_id=station_id,
         content_type="series",
         series_key=sd.key,
         display_name=sd.display_name,
-        runtime_minutes=sd.binge_row_minutes,
+        runtime_minutes=runtime,
         genre=sd.semantic_group or "",
         semantic_group=sd.semantic_group or "",
         source_file=str(workbook_path),
@@ -186,6 +188,7 @@ def _row_from_episode(
         parser_rule="nikki_workbook",
         nikki_row_filter=sd.nikki_row_filter or "",
     )
+    row["binge_row_minutes"] = sd.binge_row_minutes
     row.update(
         {
             "episode_key": _episode_key(sd.key, ep, idx0),
@@ -261,6 +264,11 @@ def _rows_from_show(
                 exclude_reason="no_episodes_loaded",
             )
         ]
+    runtime_by_episode = _standard_sheet_runtime_by_episode(
+        workbook_path,
+        sd.nikki_sheet,
+        nikki.effective_column_headers(sd, style=style),
+    )
     return [
         _row_from_episode(
             station_id=station_id,
@@ -269,6 +277,7 @@ def _rows_from_show(
             idx0=idx0,
             workbook_path=workbook_path,
             style=style,
+            runtime_minutes=runtime_by_episode.get(_clean_text(ep.raw)),
         )
         for idx0, ep in enumerate(episodes)
     ]
@@ -380,17 +389,24 @@ def _synthetic_show_for_sheet(sheet_name: str) -> ShowDef:
     )
 
 
-def _runtime_minutes(value: Any, fallback: int = 30) -> int:
+def _runtime_minutes(value: Any, fallback: float = 30) -> float:
     if value is None:
         return fallback
+    if hasattr(value, "hour") and hasattr(value, "minute"):
+        try:
+            seconds = int(getattr(value, "second", 0) or 0)
+            # TRT sheets commonly store MM:SS as an Excel time-of-day value.
+            return max(1, round(int(value.hour) + int(value.minute) / 60 + seconds / 3600, 2))
+        except Exception:
+            return fallback
     if isinstance(value, (int, float)) and not pd.isna(value):
         fv = float(value)
         if 0 < fv < 1:
-            return max(1, int(round(fv * 24 * 60)))
-        return max(1, int(round(fv)))
+            return max(1, round(fv * 24 * 60, 2))
+        return max(1, round(fv, 2))
     if hasattr(value, "total_seconds"):
         try:
-            return max(1, int(round(float(value.total_seconds()) / 60.0)))
+            return max(1, round(float(value.total_seconds()) / 60.0, 2))
         except Exception:
             return fallback
     text = _clean_text(value)
@@ -405,14 +421,73 @@ def _runtime_minutes(value: Any, fallback: int = 30) -> int:
         except ValueError:
             return fallback
         if len(nums) == 3:
-            return max(1, int(round(nums[0] * 60 + nums[1] + nums[2] / 60)))
+            return max(1, round(nums[0] * 60 + nums[1] + nums[2] / 60, 2))
         if len(nums) == 2:
             a, b = nums
-            return max(1, int(round(a * 60 + b)))
+            return max(1, round(a + b / 60, 2))
     try:
-        return max(1, int(round(float(text))))
+        return max(1, round(float(text), 2))
     except ValueError:
         return fallback
+
+
+def _norm_header(value: Any) -> str:
+    return " ".join(str(value).replace("\xa0", " ").split()).casefold()
+
+
+def _row_header_index_map(row: pd.Series) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for j in range(len(row)):
+        value = row.iloc[j]
+        if pd.isna(value):
+            continue
+        key = _norm_header(value)
+        if key and key not in out:
+            out[key] = j
+    return out
+
+
+def _find_standard_header_row(df: pd.DataFrame, columns: NikkiColumnHeaders) -> tuple[Optional[int], dict[str, int]]:
+    for i in range(min(35, len(df))):
+        row = df.iloc[i]
+        header_map = _row_header_index_map(row)
+        episode_key = _norm_header(columns.episode)
+        if episode_key not in header_map:
+            continue
+        idx = {"episode": header_map[episode_key]}
+        for label in ("trt", "runtime", "run time", "total runtime", "duration"):
+            if label in header_map:
+                idx["runtime"] = header_map[label]
+                break
+        return i, idx
+    return None, {}
+
+
+def _standard_sheet_runtime_by_episode(
+    workbook_path: Path,
+    sheet_name: Optional[str],
+    columns: NikkiColumnHeaders,
+) -> dict[str, int]:
+    if not sheet_name:
+        return {}
+    try:
+        df = pd.read_excel(workbook_path, sheet_name=sheet_name, header=None)
+    except Exception:
+        return {}
+    header_row, col_idx = _find_standard_header_row(df, columns)
+    ep_col = col_idx.get("episode")
+    runtime_col = col_idx.get("runtime")
+    if header_row is None or ep_col is None or runtime_col is None:
+        return {}
+    out: dict[str, int] = {}
+    for i in range(header_row + 1, len(df)):
+        episode = _clean_text(df.iloc[i, ep_col] if ep_col < len(df.columns) else "")
+        if not episode or _norm_header(episode) == _norm_header(columns.episode):
+            continue
+        runtime = _runtime_minutes(df.iloc[i, runtime_col] if runtime_col < len(df.columns) else None, fallback=0)
+        if runtime > 0:
+            out.setdefault(episode, runtime)
+    return out
 
 
 def _split_new_shows_display(title: str, fallback: str) -> str:
@@ -429,10 +504,11 @@ def _row_from_archive_episode(
     idx0: int,
     workbook_path: Path,
     style: str,
-    runtime_minutes: int,
+    runtime_minutes: float,
     display_name: Optional[str] = None,
     parser_rule: str = "archive_workbook_tab",
     synopsis_short: str = "",
+    scheduled_minutes: Optional[float] = None,
 ) -> dict[str, Any]:
     row = _row_from_episode(
         station_id=station_id,
@@ -448,7 +524,7 @@ def _row_from_archive_episode(
             "series_key": f"archive_{_slug(display)}",
             "display_name": display,
             "runtime_minutes": runtime_minutes,
-            "binge_row_minutes": runtime_minutes,
+            "binge_row_minutes": scheduled_minutes if scheduled_minutes is not None else runtime_minutes,
             "source_sheet": sd.nikki_sheet or "",
             "parser_rule": parser_rule,
             "synopsis_short": synopsis_short,
@@ -558,10 +634,16 @@ def _standard_archive_rows(
                 synopsis_col=1,
             )
         return []
+    runtime_by_episode = _standard_sheet_runtime_by_episode(
+        workbook_path,
+        sheet_name,
+        nikki.effective_column_headers(sd, style=style),
+    )
     runtime = 60 if any(token in sheet_name.casefold() for token in ("commish", "farscape", "silk", "wiseguy")) else sd.binge_row_minutes
     out: list[dict[str, Any]] = []
     for idx0, ep in enumerate(episodes):
         display = _split_new_shows_display(ep.title, sd.display_name) if sheet_name == "NEW SHOWS" else sd.display_name
+        episode_runtime = runtime_by_episode.get(_clean_text(ep.raw), runtime)
         out.append(
             _row_from_archive_episode(
                 station_id=station_id,
@@ -570,7 +652,8 @@ def _standard_archive_rows(
                 idx0=idx0,
                 workbook_path=workbook_path,
                 style=style,
-                runtime_minutes=runtime,
+                runtime_minutes=episode_runtime,
+                scheduled_minutes=runtime,
                 display_name=display,
             )
         )
