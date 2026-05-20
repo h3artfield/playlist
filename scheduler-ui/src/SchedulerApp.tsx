@@ -9,6 +9,7 @@ import type {
   EventInput,
 } from '@fullcalendar/core'
 import { fetchCatalog, fetchJson } from './api'
+import { draftStorageKey, normalizeWeekCount } from './scheduleImport'
 import './SchedulerApp.css'
 
 type Episode = {
@@ -270,8 +271,8 @@ const START_TIME_OPTIONS = Array.from({ length: 24 }, (_, hour) => {
   }
 })
 
-function draftStorageKey(stationId?: string): string {
-  return `schedule-builder-draft:${(stationId || 'default').trim() || 'default'}`
+function boundedScheduleWeeks(raw: number): number {
+  return normalizeWeekCount(raw)
 }
 
 function isScheduledBlock(value: unknown): value is ScheduledBlock {
@@ -800,16 +801,43 @@ function episodeFitsSlot(ep: Episode, slotMinutes: number | null): boolean {
 
 export default function SchedulerApp({
   stationId,
+  initialBlocks,
+  initialStartDate,
+  initialScheduleLengthWeeks,
+  importKey,
   onBack,
   onBaseSaved,
 }: {
   stationId?: string
+  initialBlocks?: ScheduledBlock[]
+  initialStartDate?: string
+  initialScheduleLengthWeeks?: number
+  importKey?: number
   onBack?: () => void
-  onBaseSaved?: (label: string) => void
+  onBaseSaved?: (path: string) => void
 }) {
+  function buildImportedDraft(): ScheduleDraft | null {
+    if (!initialBlocks?.length) return null
+    return {
+      version: 1,
+      stationId: stationId || '',
+      blocks: initialBlocks,
+      startDate: initialStartDate || '2026-05-18',
+      firstDayOfWeek: 'Monday',
+      startTimeHour: 0,
+      scheduleLengthWeeks: boundedScheduleWeeks(initialScheduleLengthWeeks || 1),
+      savedAt: new Date().toISOString(),
+    }
+  }
+
   const initialDraftRef = useRef<ScheduleDraft | null | undefined>(undefined)
-  if (initialDraftRef.current === undefined) initialDraftRef.current = loadScheduleDraft(stationId)
+  const importKeyRef = useRef(importKey)
+  if (initialDraftRef.current === undefined || importKeyRef.current !== importKey) {
+    importKeyRef.current = importKey
+    initialDraftRef.current = buildImportedDraft() ?? loadScheduleDraft(stationId)
+  }
   const initialDraft = initialDraftRef.current
+  const showNewScheduleSetup = importKey == null
 
   const [blocks, setBlocks] = useState<ScheduledBlock[]>(() => initialDraft?.blocks || [])
   const [selectedRanges, setSelectedRanges] = useState<TimeRange[]>([])
@@ -821,8 +849,22 @@ export default function SchedulerApp({
   const [startDate, setStartDate] = useState(() => initialDraft?.startDate || '2026-05-18')
   const [firstDayOfWeek, setFirstDayOfWeek] = useState(() => initialDraft?.firstDayOfWeek || 'Monday')
   const [startTimeHour, setStartTimeHour] = useState(() => initialDraft?.startTimeHour ?? 0)
-  const [scheduleLengthWeeks, setScheduleLengthWeeks] = useState(() => initialDraft?.scheduleLengthWeeks || 1)
+  const [scheduleLengthWeeks, setScheduleLengthWeeks] = useState(() => boundedScheduleWeeks(initialDraft?.scheduleLengthWeeks || 1))
   const [visibleWeekIndex, setVisibleWeekIndex] = useState(0)
+
+  useEffect(() => {
+    if (!importKey || !initialBlocks?.length) return
+    const imported = buildImportedDraft()
+    if (!imported) return
+    setBlocks(imported.blocks)
+    setStartDate(imported.startDate)
+    setFirstDayOfWeek(imported.firstDayOfWeek)
+    setStartTimeHour(imported.startTimeHour)
+    setScheduleLengthWeeks(imported.scheduleLengthWeeks)
+    setVisibleWeekIndex(0)
+    setGenerateResult(null)
+    setViewMode('builder')
+  }, [importKey])
   const [catalogEpisodes, setCatalogEpisodes] = useState<Episode[]>([])
   const [, setCatalogStatus] = useState('Loading normalized content...')
   const [contentMenuOpen, setContentMenuOpen] = useState(false)
@@ -1205,7 +1247,7 @@ export default function SchedulerApp({
           notes,
         }),
       })
-      onBaseSaved?.(savePayload.label)
+      onBaseSaved?.(savePayload.path)
       setGenerateNotice(`Schedule saved as ${savePayload.label}.`)
       setGenerateNoticeKind('success')
     } catch (error) {
@@ -1268,7 +1310,7 @@ export default function SchedulerApp({
               Download Reports.zip
             </button>
             <button className="primary-action" type="button" disabled={!canSave || isSavingBase} onClick={saveGeneratedBaseSchedule}>
-              {isSavingBase ? 'Saving...' : 'Save as Base Schedule'}
+              {isSavingBase ? 'Saving...' : 'Save Schedule'}
             </button>
           </div>
         </header>
@@ -1451,6 +1493,44 @@ export default function SchedulerApp({
 
       {generateNotice ? <div className={`generate-notice ${generateNoticeKind}`}>{generateNotice}</div> : null}
 
+      {/* New blank schedules only — dates/length come from auto-generate or the saved template. */}
+      {showNewScheduleSetup ? (
+        <section className="setup-card">
+          <label>
+            Start date
+            <input type="date" value={startDate} onChange={(event) => changeStartDate(event.target.value)} />
+          </label>
+          <label>
+            First day of week
+            <select value={firstDayOfWeek} onChange={(event) => setFirstDayOfWeek(event.target.value)}>
+              {DAY_NAMES.map((day) => (
+                <option key={day}>{day}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Start time
+            <select value={startTimeHour} onChange={(event) => setStartTimeHour(Number(event.target.value))}>
+              {START_TIME_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Schedule length
+            <select value={scheduleLengthWeeks} onChange={(event) => setScheduleLengthWeeks(boundedScheduleWeeks(Number(event.target.value)))}>
+              <option value={1}>1 week</option>
+              <option value={2}>2 weeks</option>
+              <option value={3}>3 weeks</option>
+              <option value={4}>4 weeks</option>
+            </select>
+          </label>
+        </section>
+      ) : null}
+
+      {/*
       <section className="setup-card">
         <label>
           Start date
@@ -1476,13 +1556,16 @@ export default function SchedulerApp({
         </label>
         <label>
           Schedule length
-          <select value={scheduleLengthWeeks} onChange={(event) => setScheduleLengthWeeks(Number(event.target.value))}>
+          <select value={scheduleLengthWeeks} onChange={(event) => setScheduleLengthWeeks(boundedScheduleWeeks(Number(event.target.value)))}>
             <option value={1}>1 week</option>
             <option value={2}>2 weeks</option>
+            <option value={3}>3 weeks</option>
             <option value={4}>4 weeks</option>
           </select>
         </label>
       </section>
+      To show this row for auto-generated schedules too, remove showNewScheduleSetup and delete the duplicate block above.
+      */}
 
       <section className="workspace">
         <div className={`calendar-card${liveSelectionRanges.length > 1 ? ' is-normalized-drag' : ''}`}>

@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import SchedulerApp from './SchedulerApp'
 import { fetchCatalog, fetchJson } from './api'
+import {
+  clearScheduleDraft,
+  confirmAutoGenerate,
+  formatScheduleWeekRange,
+  formatWeekCountLabel,
+  normalizeAutoGenerateResult,
+  savedScheduleWeekCount,
+} from './scheduleImport'
 import './App.css'
 
-type PageId = 'create' | 'blank' | 'archive' | 'edit'
+type PageId = 'create' | 'blank' | 'archive' | 'schedules'
 
 type CatalogRow = {
   content_type?: string
@@ -24,20 +32,101 @@ type BaseScheduleSummary = {
   label: string
   station_id?: string
   week_count: number
+  template_week_count?: number
+  week_monday?: string
+  created_at?: string
+  draft_block_count?: number
   show_count: number
   ready_to_generate: boolean
+}
+
+type BaseSchedulesResponse = {
+  count: number
+  ready_count: number
+  schedules: BaseScheduleSummary[]
+  active: BaseScheduleSummary | null
+}
+
+type GeneratedBlock = {
+  id: string
+  episodeId: string
+  title: string
+  start: string
+  end: string
+  show: string
+  genre: string
+  contentType: 'Series / show' | 'Movie / special' | 'Paid programming'
+  runtimeMinutes: number
+  episodeCode: string
+  episodeTitle: string
+}
+
+type AutoGenerateResult = {
+  station_id: string
+  week_monday: string
+  week_count: number
+  blocks: GeneratedBlock[]
 }
 
 const NAV_ITEMS: Array<{ id: PageId; label: string }> = [
   { id: 'create', label: 'Create Schedule' },
   { id: 'archive', label: 'Available Content' },
-  { id: 'edit', label: 'Edit schedules' },
+  { id: 'schedules', label: 'Schedule' },
 ]
+
+function scheduleTimestamp(schedule: BaseScheduleSummary): number {
+  if (schedule.created_at) {
+    const parsed = Date.parse(schedule.created_at)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+  const match = schedule.path.match(/(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})/)
+  if (match) {
+    const parsed = Date.parse(`${match[1]}T${match[2].replace(/-/g, ':')}:00`)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+  return 0
+}
+
+function sortSchedulesNewestFirst(schedules: BaseScheduleSummary[]): BaseScheduleSummary[] {
+  return [...schedules].sort((a, b) => scheduleTimestamp(b) - scheduleTimestamp(a))
+}
+
+function newestReadySchedule(schedules: BaseScheduleSummary[]): BaseScheduleSummary | null {
+  const ready = sortSchedulesNewestFirst(schedules.filter((item) => item.ready_to_generate))
+  return ready[0] || null
+}
+
+function pickSchedule(schedules: BaseScheduleSummary[], preferPath?: string): BaseScheduleSummary | null {
+  const ready = schedules.filter((item) => item.ready_to_generate)
+  if (!ready.length) return null
+  if (preferPath) {
+    const match = ready.find((item) => item.path === preferPath)
+    if (match) return match
+  }
+  return newestReadySchedule(schedules)
+}
+
+function scheduleSavedLabel(schedule: BaseScheduleSummary): string {
+  if (schedule.created_at) {
+    const parsed = new Date(schedule.created_at)
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+    }
+  }
+  const match = schedule.path.match(/(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})/)
+  if (!match) return schedule.path
+  const [datePart, timePart] = match[1].split('_')
+  return `${datePart.replace(/-/g, '/')} ${timePart.replace(/-/g, ':')}`
+}
 
 export default function App() {
   const [page, setPage] = useState<PageId>('create')
-  const [baseLabel, setBaseLabel] = useState('Checking...')
   const [draftStationId, setDraftStationId] = useState('')
+  const [generatedSchedule, setGeneratedSchedule] = useState<AutoGenerateResult | null>(null)
+  const [builderSessionKey, setBuilderSessionKey] = useState(0)
+  const [savedSchedules, setSavedSchedules] = useState<BaseScheduleSummary[]>([])
+  const [selectedSchedule, setSelectedSchedule] = useState<BaseScheduleSummary | null>(null)
+  const [schedulesStatus, setSchedulesStatus] = useState('Loading saved schedules...')
 
   useEffect(() => {
     function requestDesktopShutdown() {
@@ -53,28 +142,33 @@ export default function App() {
     return () => window.removeEventListener('pagehide', requestDesktopShutdown)
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    fetchJson<{ active: BaseScheduleSummary | null; schedules?: BaseScheduleSummary[] }>('/api/base-schedules')
-      .then((payload) => {
-        if (cancelled) return
-        if (payload.active) {
-          setBaseLabel(payload.active.label)
-          return
-        }
-        if (payload.schedules?.length) {
-          setBaseLabel('No schedule yet')
-          return
-        }
-        setBaseLabel('No schedule yet')
-      })
-      .catch(() => {
-        if (!cancelled) setBaseLabel('No schedule yet')
-      })
-    return () => {
-      cancelled = true
+  const refreshSchedules = async (preferPath?: string) => {
+    try {
+      const payload = await fetchJson<BaseSchedulesResponse>('/api/base-schedules')
+      const sorted = sortSchedulesNewestFirst(payload.schedules || [])
+      const ready = sorted.filter((item) => item.ready_to_generate)
+      setSavedSchedules(ready)
+      const picked = pickSchedule(payload.schedules || [], preferPath)
+      setSelectedSchedule(picked)
+      setSchedulesStatus(
+        ready.length
+          ? `${ready.length} saved schedule${ready.length === 1 ? '' : 's'} ready for auto-generate. Newest is selected by default.`
+          : 'No saved schedules yet. Build one, then use Save Schedule on the results page.',
+      )
+    } catch {
+      setSavedSchedules([])
+      setSelectedSchedule(null)
+      setSchedulesStatus('Start the local API to load saved schedules.')
     }
+  }
+
+  useEffect(() => {
+    void refreshSchedules()
   }, [])
+
+  function selectSchedule(schedule: BaseScheduleSummary) {
+    setSelectedSchedule(schedule)
+  }
 
   return (
     <div className="app-shell">
@@ -82,10 +176,6 @@ export default function App() {
         <div>
           <span className="brand-kicker">Playlist</span>
           <h1>Schedule Builder</h1>
-        </div>
-        <div className="base-schedule-control">
-          <span>Schedule</span>
-          <button type="button">{baseLabel}</button>
         </div>
       </header>
 
@@ -98,7 +188,9 @@ export default function App() {
               type="button"
               onClick={() => setPage(item.id)}
             >
-              {item.label}
+              {item.id === 'schedules' && selectedSchedule
+                ? `${item.label}: ${selectedSchedule.station_id || selectedSchedule.label.replace(/^Station\s+/i, '')}`
+                : item.label}
             </button>
           ))}
         </div>
@@ -107,61 +199,107 @@ export default function App() {
       <main className="app-content">
         {page === 'create' ? (
           <CreateSchedulePage
+            activeBase={selectedSchedule}
             onBlankSchedule={(stationId) => {
               setDraftStationId(stationId)
+              setGeneratedSchedule(null)
+              setBuilderSessionKey((key) => key + 1)
               setPage('blank')
             }}
+            onAutoGenerate={(result) => {
+              setDraftStationId(result.station_id)
+              setGeneratedSchedule(result)
+              setBuilderSessionKey((key) => key + 1)
+              setPage('blank')
+            }}
+            onOpenSchedulePicker={() => setPage('schedules')}
           />
         ) : null}
         {page === 'blank' ? (
           <SchedulerApp
+            key={`builder-${builderSessionKey}`}
             stationId={draftStationId}
-            onBack={() => setPage('create')}
-            onBaseSaved={(label) => setBaseLabel(label)}
+            initialBlocks={generatedSchedule?.blocks}
+            initialStartDate={generatedSchedule?.week_monday}
+            initialScheduleLengthWeeks={generatedSchedule?.week_count}
+            importKey={generatedSchedule ? builderSessionKey : undefined}
+            onBack={() => {
+              setGeneratedSchedule(null)
+              setPage('create')
+            }}
+            onBaseSaved={(path) => void refreshSchedules(path)}
           />
         ) : null}
         {page === 'archive' ? <ArchivePage /> : null}
-        {page === 'edit' ? <EditSchedulePage /> : null}
+        {page === 'schedules' ? (
+          <SchedulesPage
+            schedules={savedSchedules}
+            selectedPath={selectedSchedule?.path || ''}
+            status={schedulesStatus}
+            onSelect={(schedule) => {
+              selectSchedule(schedule)
+              setPage('create')
+            }}
+            onRefresh={() => void refreshSchedules()}
+          />
+        ) : null}
       </main>
     </div>
   )
 }
 
-function CreateSchedulePage({ onBlankSchedule }: { onBlankSchedule: (stationId: string) => void }) {
-  const [apiStatus, setApiStatus] = useState('Checking local API...')
-  const [baseStatus, setBaseStatus] = useState('Checking for a saved base schedule...')
-  const [activeBase, setActiveBase] = useState<BaseScheduleSummary | null>(null)
+function CreateSchedulePage({
+  activeBase,
+  onBlankSchedule,
+  onAutoGenerate,
+  onOpenSchedulePicker,
+}: {
+  activeBase: BaseScheduleSummary | null
+  onBlankSchedule: (stationId: string) => void
+  onAutoGenerate: (result: AutoGenerateResult) => void
+  onOpenSchedulePicker: () => void
+}) {
   const [stationId, setStationId] = useState('')
   const [stationIdError, setStationIdError] = useState('')
+  const [autoStatus, setAutoStatus] = useState('')
+  const [isAutoGenerating, setIsAutoGenerating] = useState(false)
+  const [autoGenerateWeeks, setAutoGenerateWeeks] = useState(1)
 
-  useEffect(() => {
-    let cancelled = false
-    Promise.all([
-      fetchJson<{ status: string }>('/api/health'),
-      fetchJson<{ active: BaseScheduleSummary | null; count: number; ready_count: number }>('/api/base-schedules'),
-    ])
-      .then(([health, bases]) => {
-        if (cancelled) return
-        setApiStatus(`Local API is ${health.status}`)
-        setActiveBase(bases.active)
-        if (bases.active) {
-          setBaseStatus(`${bases.active.label} found with ${bases.active.week_count} week${bases.active.week_count === 1 ? '' : 's'}`)
-        } else if (bases.count) {
-          setBaseStatus('Builder base schedule found, but it has no weeks yet.')
-        } else {
-          setBaseStatus('No builder-created base schedule found yet.')
-        }
+  const savedWeeks = activeBase ? savedScheduleWeekCount(activeBase) : 1
+
+  async function autoGenerateSchedule() {
+    if (!activeBase) return
+    if (!confirmAutoGenerate(savedWeeks, autoGenerateWeeks)) return
+
+    setIsAutoGenerating(true)
+    setAutoStatus('Loading saved schedule and continuing episodes...')
+    try {
+      const health = await fetchJson<{ features?: { auto_generate_weeks?: boolean } }>('/api/health')
+      if (!health.features?.auto_generate_weeks) {
+        throw new Error(
+          'The API on port 8765 is out of date. Close Schedule Builder if it is open, then from the playlist folder run: .\\scripts\\start-dev-api.ps1 â€” or: python -m binge_schedule.cli serve',
+        )
+      }
+      const raw = await fetchJson<AutoGenerateResult>('/api/schedule/auto-generate', {
+        method: 'POST',
+        body: JSON.stringify({ base_path: activeBase.path, week_count: autoGenerateWeeks }),
       })
-      .catch(() => {
-        if (!cancelled) {
-          setApiStatus('Local API is not running yet')
-          setBaseStatus('Start the local API to check for saved base schedules.')
-        }
+      const result = normalizeAutoGenerateResult(raw, {
+        requestedWeeks: autoGenerateWeeks,
+        baseWeekMonday: activeBase.week_monday,
+        baseTemplateWeeks: activeBase.template_week_count || activeBase.week_count || 1,
+        templateBlockCount: activeBase.draft_block_count,
       })
-    return () => {
-      cancelled = true
+      clearScheduleDraft(result.station_id)
+      setAutoStatus('')
+      onAutoGenerate(result)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Auto generate failed.'
+      setAutoStatus(message)
+    } finally {
+      setIsAutoGenerating(false)
     }
-  }, [])
+  }
 
   return (
     <main className="app-page">
@@ -170,7 +308,7 @@ function CreateSchedulePage({ onBlankSchedule }: { onBlankSchedule: (stationId: 
           <h2>Create a schedule</h2>
         </div>
         <div className="create-actions">
-          <label className="station-id-field">
+          <label className="schedule-field station-id-field">
             <span>Station ID</span>
             <input
               type="text"
@@ -202,22 +340,42 @@ function CreateSchedulePage({ onBlankSchedule }: { onBlankSchedule: (stationId: 
       </section>
 
       {activeBase ? (
-        <section className="build-panel">
+        <section className="create-panel">
           <div>
-            <h3>Auto generate schedule</h3>
-            <p>{baseStatus}</p>
-            <p>{apiStatus}</p>
+            <h2>Auto generate schedule</h2>
+            {autoStatus ? <p className="panel-status-error">{autoStatus}</p> : null}
           </div>
-          <button className="primary-action card-action" type="button">
-            Auto Generate
-          </button>
+          <div className="create-actions">
+            <label className="schedule-field week-count-field">
+              <span>Weeks</span>
+              <select
+                value={autoGenerateWeeks}
+                disabled={isAutoGenerating}
+                onChange={(event) => setAutoGenerateWeeks(Number(event.target.value))}
+              >
+                {[1, 2, 3, 4].map((weeks) => (
+                  <option key={weeks} value={weeks}>
+                    {weeks} week{weeks === 1 ? '' : 's'}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button className="primary-action card-action" type="button" disabled={isAutoGenerating} onClick={autoGenerateSchedule}>
+              {isAutoGenerating ? 'Generating...' : 'Auto Generate'}
+            </button>
+          </div>
         </section>
       ) : (
-        <section className="build-panel disabled-panel" aria-disabled="true">
-          <h2>Auto generate schedule</h2>
-          <button className="primary-action card-action" type="button" disabled>
-            Create Schedule
-          </button>
+        <section className="create-panel disabled-panel" aria-disabled="true">
+          <div>
+            <h2>Auto generate schedule</h2>
+            <p className="muted">Select a saved schedule on the Schedule tab first.</p>
+          </div>
+          <div className="create-actions create-actions--solo">
+            <button className="primary-action card-action" type="button" onClick={onOpenSchedulePicker}>
+              Choose schedule
+            </button>
+          </div>
         </section>
       )}
     </main>
@@ -340,7 +498,7 @@ function ArchivePage() {
                 <span>
                   <strong>{name}</strong>
                   <small>
-                    {contentCategoryLabel(category)} · {first.genre || first.semantic_group || 'unlabeled'} · {group.length.toLocaleString()}{' '}
+                    {contentCategoryLabel(category)} Â· {first.genre || first.semantic_group || 'unlabeled'} Â· {group.length.toLocaleString()}{' '}
                     {category === 'series' ? 'episodes' : 'items'}
                   </small>
                 </span>
@@ -388,30 +546,63 @@ function contentCategoryLabel(category: ContentCategory): string {
   return 'Series'
 }
 
-function EditSchedulePage() {
+function SchedulesPage({
+  schedules,
+  selectedPath,
+  status,
+  onSelect,
+  onRefresh,
+}: {
+  schedules: BaseScheduleSummary[]
+  selectedPath: string
+  status: string
+  onSelect: (schedule: BaseScheduleSummary) => void
+  onRefresh: () => void
+}) {
   return (
-    <main className="app-page">
-      <section className="page-header">
+    <main className="app-page schedules-page">
+      <section className="page-header schedule-page-header">
         <div>
-          <p className="eyebrow">Edit Schedule</p>
-          <h1>Existing Schedule Editor</h1>
-          <p>This page will load existing BINGE/GRIDS files through the Python block adapter and open them in the visual calendar.</p>
+          <p className="eyebrow">Schedule</p>
+          <h1>Saved schedules</h1>
+          <p>{status}</p>
         </div>
+        <button className="ghost-action" type="button" onClick={onRefresh}>
+          Refresh
+        </button>
       </section>
-      <section className="workflow-grid">
-        <div className="workflow-card static">
-          <span>Import existing files</span>
-          <small>Upload BINGE.xlsx and BINGE GRIDS.xlsx, then convert them to editable React blocks.</small>
-        </div>
-        <div className="workflow-card static">
-          <span>Edit blocks visually</span>
-          <small>Use the same click, delete, replace, and rule analysis tools as the blank builder.</small>
-        </div>
-        <div className="workflow-card static">
-          <span>Regenerate outputs</span>
-          <small>Save back to GRIDS and run the Python export engine.</small>
-        </div>
-      </section>
+
+      {schedules.length ? (
+        <section className="schedule-picker-list" aria-label="Saved schedules">
+          {schedules.map((schedule) => {
+            const weeks = savedScheduleWeekCount(schedule)
+            const range = formatScheduleWeekRange(schedule.week_monday, weeks)
+            const isSelected = schedule.path === selectedPath
+            return (
+              <button
+                key={schedule.path}
+                type="button"
+                className={`schedule-picker-card${isSelected ? ' is-selected' : ''}`}
+                onClick={() => onSelect(schedule)}
+              >
+                <div className="schedule-picker-card-head">
+                  <strong>{schedule.label}</strong>
+                  {isSelected ? <span className="schedule-picker-badge">Active</span> : null}
+                </div>
+                <span>
+                  {formatWeekCountLabel(weeks)}
+                  {range ? ` · ${range}` : ''}
+                </span>
+                <small>Saved {scheduleSavedLabel(schedule)}</small>
+              </button>
+            )
+          })}
+        </section>
+      ) : (
+        <section className="create-panel create-panel--simple">
+          <p className="muted">Save a schedule from the builder results page to use it here for auto-generate.</p>
+        </section>
+      )}
     </main>
   )
 }

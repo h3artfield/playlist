@@ -62,6 +62,11 @@ class DownloadSchedulePayload(BaseModel):
     notes: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class AutoGeneratePayload(BaseModel):
+    base_path: str = ""
+    week_count: int = 1
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Playlist Schedule Builder API", version="0.1.0")
     app.add_middleware(
@@ -73,8 +78,14 @@ def create_app() -> FastAPI:
     )
 
     @app.get("/api/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok"}
+    def health() -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "features": {
+                "auto_generate_weeks": True,
+                "auto_generate_date_shift": True,
+            },
+        }
 
     @app.post("/api/desktop/shutdown")
     def desktop_shutdown() -> dict[str, bool]:
@@ -102,7 +113,11 @@ def create_app() -> FastAPI:
     @app.get("/api/base-schedules")
     def base_schedules() -> dict[str, Any]:
         schedules = _builder_base_schedules()
-        ready = [item for item in schedules if item["ready_to_generate"]]
+        ready = sorted(
+            [item for item in schedules if item["ready_to_generate"]],
+            key=_base_schedule_sort_key,
+            reverse=True,
+        )
         return {
             "count": len(schedules),
             "ready_count": len(ready),
@@ -187,6 +202,23 @@ def create_app() -> FastAPI:
             media_type="application/zip",
             headers={"Content-Disposition": f'attachment; filename="{station_label} Reports.zip"'},
         )
+
+    @app.post("/api/schedule/auto-generate")
+    def auto_generate_schedule(payload: AutoGeneratePayload) -> dict[str, Any]:
+        base = _load_builder_base_schedule(payload.base_path)
+        marker = base["marker"]
+        generate_week_count = _bounded_week_count(payload.week_count)
+        blocks, week_monday, week_count = _auto_generate_blocks(
+            base["path"],
+            base["raw"],
+            generate_week_count=generate_week_count,
+        )
+        return {
+            "station_id": str(marker.get("station_id") or ""),
+            "week_monday": week_monday.isoformat(),
+            "week_count": week_count,
+            "blocks": blocks,
+        }
 
     @app.post("/api/base-schedules/save")
     def save_base_schedule(payload: SaveBaseSchedulePayload) -> dict[str, Any]:
@@ -356,6 +388,7 @@ def _save_builder_base_schedule(
         _build_grids_preview_workbook(blocks, station_id=station_id, week_monday=week_monday, week_count=week_count)
     )
     (save_dir / "Warnings and Notes.csv").write_text(_notes_csv(notes, station_id=station_id), encoding="utf-8")
+    _save_auto_cursors(save_dir / f"episode_cursors_{safe_station}.json", _seed_cursors_from_template(blocks, _catalog_episodes_by_show()))
     return path
 
 
@@ -600,6 +633,243 @@ def _base_schedule_source_config() -> dict[str, Any]:
     return {}
 
 
+def _load_builder_base_schedule(raw_path: str = "") -> dict[str, Any]:
+    schedules = _builder_base_schedules()
+    selected: Path | None = None
+    if raw_path.strip():
+        requested = Path(raw_path.strip())
+        for item in schedules:
+            path = Path(str(item.get("path") or ""))
+            if path == requested or path.as_posix() == requested.as_posix():
+                selected = path
+                break
+        if selected is None and requested.is_file() and requested.name == "base_schedule.yaml":
+            selected = requested
+    elif schedules:
+        ready = [item for item in schedules if item.get("ready_to_generate")]
+        if ready:
+            selected = Path(str(ready[0]["path"]))
+    if selected is None or not selected.is_file():
+        raise HTTPException(status_code=404, detail="No saved base schedule found")
+    try:
+        raw = yaml.safe_load(selected.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read base schedule: {selected}") from exc
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="Saved base schedule is not valid")
+    marker = raw.get("schedule_builder")
+    if not isinstance(marker, dict) or marker.get("managed") is not True:
+        raise HTTPException(status_code=400, detail="Saved schedule is not builder-managed")
+    return {"path": selected, "raw": raw, "marker": marker}
+
+
+def _parse_week_monday(value: Any) -> date:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Saved base schedule has an invalid week_monday") from exc
+
+
+def _remint_block_id(block: dict[str, Any], start: datetime) -> str:
+    raw_id = str(block.get("id") or "block")
+    stem = raw_id.rsplit("-", 1)[0] if "-" in raw_id else raw_id
+    return f"{stem}-{int(start.timestamp() * 1000)}"
+
+
+def _auto_generate_blocks(
+    base_path: Path,
+    raw: dict[str, Any],
+    *,
+    generate_week_count: int,
+) -> tuple[list[dict[str, Any]], date, int]:
+    marker = raw.get("schedule_builder") if isinstance(raw.get("schedule_builder"), dict) else {}
+    template_blocks = marker.get("draft_blocks") if isinstance(marker.get("draft_blocks"), list) else []
+    if not template_blocks:
+        raise HTTPException(status_code=400, detail="Saved base schedule has no template blocks")
+    template_week_count = _bounded_week_count(int(marker.get("week_count") or 1))
+    generate_week_count = _bounded_week_count(generate_week_count)
+    base_monday = _parse_week_monday(marker.get("week_monday"))
+    next_monday = base_monday + timedelta(days=template_week_count * 7)
+
+    station_id = str(marker.get("station_id") or "")
+    safe_station = _safe_station_id(station_id)
+    cursor_path = base_path.parent / f"episode_cursors_{safe_station}.json"
+    episodes_by_show = _catalog_episodes_by_show()
+    cursors = _load_auto_cursors(cursor_path)
+    if not cursors:
+        cursors = _seed_cursors_from_template(template_blocks, episodes_by_show)
+
+    generated: list[dict[str, Any]] = []
+    for gen_week_index in range(generate_week_count):
+        template_week_index = gen_week_index % template_week_count
+        target_week_monday = next_monday + timedelta(days=gen_week_index * 7)
+        template_week_start = base_monday + timedelta(days=template_week_index * 7)
+
+        for block in sorted(template_blocks, key=lambda item: str(item.get("start") or "")):
+            start = _parse_iso_datetime(block.get("start"))
+            end = _parse_iso_datetime(block.get("end"))
+            if start is None:
+                continue
+            block_template_week = (start.date() - base_monday).days // 7
+            if block_template_week != template_week_index:
+                continue
+
+            day_offset = start.date() - template_week_start
+            new_start = datetime.combine(target_week_monday + day_offset, start.time())
+            if end is not None:
+                new_end = new_start + (end - start)
+            else:
+                new_end = new_start + timedelta(minutes=30)
+
+            next_block = dict(block)
+            next_block["start"] = new_start.isoformat(timespec="seconds")
+            next_block["end"] = new_end.isoformat(timespec="seconds")
+            next_block["id"] = _remint_block_id(block, new_start)
+
+            show = str(next_block.get("show") or "").strip()
+            if _auto_generates_episode(next_block) and show in episodes_by_show:
+                episodes = episodes_by_show[show]
+                if episodes:
+                    index = int(cursors.get(show, 0) or 0) % len(episodes)
+                    episode = episodes[index]
+                    cursors[show] = (index + 1) % len(episodes)
+                    next_block.update(
+                        {
+                            "episodeId": episode["id"],
+                            "episode_id": episode["id"],
+                            "episodeCode": episode["code"],
+                            "episodeTitle": episode["title"],
+                            "title": " ".join(part for part in (episode["code"], episode["title"]) if part).strip(),
+                            "runtimeMinutes": episode["runtime_minutes"],
+                            "content_type": episode["content_type"],
+                            "contentType": episode["content_type"],
+                        }
+                    )
+            generated.append(next_block)
+
+    generated.sort(key=lambda item: str(item.get("start") or ""))
+    return generated, next_monday, generate_week_count
+
+
+def _catalog_episodes_by_show() -> dict[str, list[dict[str, Any]]]:
+    payload = _static_catalog_payload()
+    rows: list[dict[str, Any]]
+    if payload is not None and isinstance(payload.get("rows"), list):
+        rows = payload["rows"]
+    else:
+        cfg = load_build_config(DEFAULT_CONFIG)
+        rows = canonical_rows_from_config(cfg)
+    by_show: dict[str, list[dict[str, Any]]] = {}
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        if row.get("availability_status") and row.get("availability_status") not in {"available", "metadata_only"}:
+            continue
+        content_type = _frontend_content_type(str(row.get("content_type") or ""))
+        if content_type != "Series / show":
+            continue
+        show = str(row.get("display_name") or "").strip()
+        if not show:
+            continue
+        scheduled = _float_or_none(row.get("binge_row_minutes") or row.get("runtime_minutes")) or 30
+        runtime = _float_or_none(row.get("runtime_minutes")) or scheduled
+        episode = {
+            "id": str(row.get("episode_key") or f"{row.get('series_key') or show}-{index}"),
+            "show": show,
+            "code": str(row.get("episode_code") or row.get("episode_number") or "EP").strip(),
+            "title": str(row.get("episode_title") or show).strip(),
+            "runtime_minutes": runtime,
+            "content_type": content_type,
+        }
+        by_show.setdefault(show, []).append(episode)
+    return by_show
+
+
+def _frontend_content_type(value: str) -> str:
+    normalized = value.lower().replace(" ", "_")
+    if normalized in {"movie", "movies", "special", "specials", "film", "feature"}:
+        return "Movie / special"
+    if normalized in {"paid", "paid_programming", "infomercial", "ministry"}:
+        return "Paid programming"
+    return "Series / show"
+
+
+def _auto_generates_episode(block: dict[str, Any]) -> bool:
+    content_type = str(block.get("contentType") or block.get("content_type") or "").casefold()
+    code = str(block.get("episodeCode") or block.get("episode_code") or "").upper()
+    if "paid" in content_type or code in {"PAID", "LIT"}:
+        return False
+    if "movie" in content_type:
+        return False
+    return True
+
+
+def _load_auto_cursors(path: Path) -> dict[str, int]:
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    raw = payload.get("cursors") if isinstance(payload, dict) else {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, int] = {}
+    for show, value in raw.items():
+        try:
+            out[str(show)] = max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _save_auto_cursors(path: Path, cursors: dict[str, int]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"cursors": cursors}, indent=2), encoding="utf-8")
+
+
+def _seed_cursors_from_template(
+    blocks: list[dict[str, Any]],
+    episodes_by_show: dict[str, list[dict[str, Any]]],
+) -> dict[str, int]:
+    cursors: dict[str, int] = {}
+    for block in blocks:
+        if not _auto_generates_episode(block):
+            continue
+        show = str(block.get("show") or "").strip()
+        episodes = episodes_by_show.get(show) or []
+        if not episodes:
+            continue
+        pos = _episode_position(block, episodes)
+        if pos is not None:
+            cursors[show] = max(cursors.get(show, 0), pos + 1)
+    for show, episodes in episodes_by_show.items():
+        if show in cursors and episodes:
+            cursors[show] = cursors[show] % len(episodes)
+    return cursors
+
+
+def _episode_position(block: dict[str, Any], episodes: list[dict[str, Any]]) -> int | None:
+    tokens = {
+        str(block.get("episodeId") or block.get("episode_id") or "").strip().casefold(),
+        str(block.get("episodeCode") or block.get("episode_code") or "").strip().casefold(),
+        str(block.get("episodeTitle") or block.get("episode_title") or "").strip().casefold(),
+    }
+    tokens.discard("")
+    for index, episode in enumerate(episodes):
+        if {
+            str(episode.get("id") or "").strip().casefold(),
+            str(episode.get("code") or "").strip().casefold(),
+            str(episode.get("title") or "").strip().casefold(),
+        } & tokens:
+            return index
+    return None
+
+
 def _saved_schedules_root() -> Path:
     if os.environ.get("SCHEDULE_BUILDER_DESKTOP_RUNTIME") == "1" or getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent / "saved_schedules"
@@ -620,6 +890,13 @@ def _station_label(station_id: str) -> str:
     return "".join(ch if ch.isalnum() or ch in {" ", "-", "_"} else "_" for ch in station_id.strip()).strip() or "Station"
 
 
+def _base_schedule_sort_key(item: dict[str, Any]) -> str:
+    created = str(item.get("created_at") or "").strip()
+    if created:
+        return created
+    return str(item.get("path") or "")
+
+
 def _base_schedule_label(path: Path, station_id: str | None = None) -> str:
     sid = (station_id or "").strip()
     if sid:
@@ -635,6 +912,7 @@ def _builder_base_schedules() -> list[dict[str, Any]]:
         candidates.extend(sorted(config_dir.glob("*.yaml")))
     saved_root = _saved_schedules_root()
     if saved_root.is_dir():
+        candidates.extend(sorted(saved_root.glob("*/base_schedule.yaml")))
         candidates.extend(sorted(saved_root.glob("*/*/base_schedule.yaml")))
     for path in candidates:
         try:
@@ -656,10 +934,13 @@ def _builder_base_schedules() -> list[dict[str, Any]]:
                 "station_id": station_id,
                 "kind": marker.get("kind") or "base_schedule",
                 "source": marker.get("source") or "",
-                "week_count": len(weeks),
+                "week_count": int(marker.get("week_count") or len(weeks) or 1),
+                "template_week_count": int(marker.get("week_count") or len(weeks) or 1),
+                "week_monday": str(marker.get("week_monday") or ""),
+                "created_at": str(marker.get("created_at") or ""),
                 "show_count": len(shows),
                 "draft_block_count": int(marker.get("draft_block_count") or 0),
-                "ready_to_generate": bool(weeks) and int(marker.get("draft_block_count") or 0) > 0,
+                "ready_to_generate": int(marker.get("draft_block_count") or 0) > 0,
             }
         )
     return out
