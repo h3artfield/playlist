@@ -1,5 +1,6 @@
 param(
-    [switch]$Clean
+    [switch]$Clean,
+    [switch]$Demo
 )
 
 $ErrorActionPreference = "Stop"
@@ -66,5 +67,21 @@ if (Test-Path "$Root\cloud") {
 
 python -m PyInstaller @args
 
+$distApp = "$Root\dist\ScheduleBuilder"
+if ($Demo) {
+    $demoSaved = "$Root\packaging\demo_assets\saved_schedules"
+    if (Test-Path $demoSaved) {
+        $target = "$distApp\saved_schedules"
+        if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+        Copy-Item $demoSaved $distApp -Recurse -Force
+        Write-Host "Copied demo saved_schedules into desktop bundle."
+    } else {
+        Write-Warning "Demo assets missing; run prepare_demo_bundle.py first."
+    }
+}
+
 Write-Host ""
-Write-Host "Desktop bundle created at: $Root\dist\ScheduleBuilder"
+Write-Host "Desktop bundle created at: $distApp"
+if ($Demo) {
+    Write-Host "Demo install includes station TEST week at saved_schedules/test/2026-05-19_21-33-48"
+}

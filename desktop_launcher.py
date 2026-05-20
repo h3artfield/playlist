@@ -119,6 +119,11 @@ def main() -> int:
                 logf.write(f"Working directory: {root}\n")
                 os.environ.setdefault("SCHEDULE_BUILDER_DESKTOP_RUNTIME", "1")
                 os.environ.setdefault("SCHEDULE_BUILDER_REACT_DIST", str(react_dist))
+                demo_schedule = (
+                    root / "saved_schedules" / "test" / "2026-05-19_21-33-48" / "base_schedule.yaml"
+                )
+                if demo_schedule.is_file():
+                    os.environ.setdefault("SCHEDULE_BUILDER_DEFAULT_CONFIG", "config/blank_schedule.yaml")
                 url = "http://127.0.0.1:8765"
                 threading.Timer(1.2, lambda: webbrowser.open(url)).start()
                 with contextlib.redirect_stdout(logf), contextlib.redirect_stderr(logf):

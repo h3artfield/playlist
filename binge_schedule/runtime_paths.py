@@ -145,6 +145,20 @@ def saved_schedules_root() -> Path:
     return schedule_builder_data_dir() / "saved_schedules"
 
 
+def default_config_path() -> Path:
+    """Active YAML config (demo desktop bundle uses SCHEDULE_BUILDER_DEFAULT_CONFIG)."""
+    override = os.environ.get("SCHEDULE_BUILDER_DEFAULT_CONFIG", "").strip()
+    if override:
+        try:
+            return resolve_config_path(override)
+        except FileNotFoundError:
+            pass
+    try:
+        return resolve_config_path("config/april_2026.yaml")
+    except FileNotFoundError:
+        return Path("config/april_2026.yaml")
+
+
 def content_import_wizard_available() -> bool:
     try:
         import multipart  # noqa: F401

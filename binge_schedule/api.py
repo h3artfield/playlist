@@ -26,7 +26,7 @@ from binge_schedule.rule_analyzer import analyze_schedule_rules
 from binge_schedule.schedule_blocks import blocks_to_week_grid, empty_slots_for_blocks, grid_to_blocks
 
 
-DEFAULT_CONFIG = Path("config/april_2026.yaml")
+DEFAULT_CONFIG = Path(os.environ.get("SCHEDULE_BUILDER_DEFAULT_CONFIG", "config/april_2026.yaml"))
 
 
 class BlocksPayload(BaseModel):
@@ -464,10 +464,10 @@ def _ui_dist_path() -> Path | None:
 
 
 def _safe_config_path(raw: str) -> Path:
-    from binge_schedule.runtime_paths import resolve_config_path
+    from binge_schedule.runtime_paths import default_config_path, resolve_config_path
 
     try:
-        p = resolve_config_path(raw or str(DEFAULT_CONFIG))
+        p = resolve_config_path(raw or str(default_config_path()))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"Config not found: {raw}") from exc
     if p.suffix.lower() not in {".yaml", ".yml"}:
@@ -762,13 +762,16 @@ def _sheet_name_for_week(week_monday: date) -> str:
 
 
 def _base_schedule_source_config() -> dict[str, Any]:
-    for path in (Path("config") / "blank_schedule.yaml", DEFAULT_CONFIG):
+    from binge_schedule.runtime_paths import default_config_path, resolve_config_path
+
+    for raw in ("config/blank_schedule.yaml", str(default_config_path())):
         try:
-            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+            path = resolve_config_path(raw)
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
         except Exception:
             continue
-        if isinstance(raw, dict):
-            return raw
+        if isinstance(loaded, dict):
+            return loaded
     return {}
 
 
@@ -900,7 +903,9 @@ def _catalog_episodes_by_show() -> dict[str, list[dict[str, Any]]]:
     if payload is not None and isinstance(payload.get("rows"), list):
         rows = payload["rows"]
     else:
-        cfg = load_build_config(DEFAULT_CONFIG)
+        from binge_schedule.runtime_paths import default_config_path
+
+        cfg = load_build_config(default_config_path())
         rows = canonical_rows_from_config(cfg)
     by_show: dict[str, list[dict[str, Any]]] = {}
     for index, row in enumerate(rows):

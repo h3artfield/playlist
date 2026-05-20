@@ -26,7 +26,7 @@ jobs:
       - name: Build desktop bundle (PyInstaller)
         shell: pwsh
         run: |
-          ./packaging/windows/build_desktop.ps1 -Clean
+          ./packaging/windows/build_desktop.ps1 -Clean -Demo
 
       - name: Install Inno Setup
         shell: pwsh
