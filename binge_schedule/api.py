@@ -6,11 +6,10 @@ from io import BytesIO
 import json
 from pathlib import Path
 import os
+import shutil
 import sys
 import threading
 from typing import Any, Optional
-from zipfile import ZIP_DEFLATED, ZipFile
-
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -52,6 +51,7 @@ class SaveBaseSchedulePayload(BaseModel):
     blocks: list[dict[str, Any]] = Field(default_factory=list)
     suggested_rules: list[dict[str, Any]] = Field(default_factory=list)
     notes: list[dict[str, Any]] = Field(default_factory=list)
+    saved_directory: str = ""
 
 
 class DownloadSchedulePayload(BaseModel):
@@ -65,6 +65,24 @@ class DownloadSchedulePayload(BaseModel):
 class AutoGeneratePayload(BaseModel):
     base_path: str = ""
     week_count: int = 1
+
+
+class BaseSchedulePathPayload(BaseModel):
+    path: str = ""
+
+
+class AppSettingsPayload(BaseModel):
+    theme: str = "dark"
+    accent_primary: str = "#2563eb"
+    accent_secondary: str = "#7c3aed"
+    primary_save_directory: str = ""
+    backup_save_directory: str = ""
+    backup_enabled: bool = True
+    desktop_window_mode: str = "windowed"
+
+
+class PickDirectoryPayload(BaseModel):
+    kind: str = "primary"
 
 
 class ImportContentRowPayload(BaseModel):
@@ -129,6 +147,8 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
+        from binge_schedule.app_settings import load_settings, primary_saved_schedules_root
+        from binge_schedule.legal import legal_status
         from binge_schedule.runtime_paths import content_import_wizard_available, is_desktop_runtime
 
         return {
@@ -138,8 +158,65 @@ def create_app() -> FastAPI:
                 "auto_generate_date_shift": True,
                 "content_import_wizard": content_import_wizard_available(),
                 "desktop_runtime": is_desktop_runtime(),
+                "app_settings": True,
+                "export_to_downloads": True,
             },
+            "primary_save_directory": primary_saved_schedules_root().as_posix(),
+            "legal": legal_status(load_settings()),
         }
+
+    @app.get("/api/desktop-download")
+    def desktop_download_info() -> dict[str, Any]:
+        from binge_schedule.legal import desktop_download_meta
+        from binge_schedule.runtime_paths import is_desktop_runtime
+
+        meta = desktop_download_meta()
+        return {
+            **meta,
+            "desktop_runtime": is_desktop_runtime(),
+            "show_download_cta": not is_desktop_runtime(),
+        }
+
+    @app.get("/api/settings")
+    def get_settings() -> dict[str, Any]:
+        from binge_schedule.app_settings import settings_for_api
+
+        return settings_for_api()
+
+    def _save_settings(payload: AppSettingsPayload) -> dict[str, Any]:
+        from binge_schedule.app_settings import save_settings, settings_for_api
+
+        try:
+            save_settings(payload.model_dump())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        saved = settings_for_api()
+        if saved.get("desktop_runtime"):
+            from binge_schedule.desktop_window import apply_desktop_window_mode as apply_mode
+
+            mode = str(saved.get("desktop_window_mode") or "windowed")
+            saved["desktop_window_applied"] = apply_mode(mode)
+        return saved
+
+    @app.put("/api/settings")
+    def put_settings(payload: AppSettingsPayload) -> dict[str, Any]:
+        return _save_settings(payload)
+
+    @app.post("/api/settings")
+    def post_settings(payload: AppSettingsPayload) -> dict[str, Any]:
+        return _save_settings(payload)
+
+    @app.post("/api/settings/pick-directory")
+    def pick_settings_directory(payload: PickDirectoryPayload) -> dict[str, str]:
+        from binge_schedule.app_settings import pick_directory_dialog
+
+        kind = (payload.kind or "primary").strip().lower()
+        title = "Primary schedule save folder" if kind == "primary" else "Backup schedule save folder"
+        try:
+            selected = pick_directory_dialog(title=title)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"path": selected}
 
     @app.post("/api/desktop/shutdown")
     def desktop_shutdown() -> dict[str, bool]:
@@ -304,6 +381,33 @@ def create_app() -> FastAPI:
             "active": ready[0] if ready else None,
         }
 
+    def _base_schedule_detail_response(path: str) -> dict[str, Any]:
+        if not path.strip():
+            raise HTTPException(status_code=400, detail="path is required")
+        base = _load_builder_base_schedule(path.strip())
+        marker = base["marker"]
+        raw = base["raw"]
+        blocks = marker.get("draft_blocks") if isinstance(marker.get("draft_blocks"), list) else []
+        weeks = raw.get("weeks") if isinstance(raw.get("weeks"), list) else []
+        return {
+            "path": base["path"].as_posix(),
+            "label": _base_schedule_label(base["path"], str(marker.get("station_id") or "")),
+            "station_id": str(marker.get("station_id") or ""),
+            "week_monday": str(marker.get("week_monday") or ""),
+            "week_count": int(marker.get("week_count") or len(weeks) or 1),
+            "created_at": str(marker.get("created_at") or ""),
+            "draft_block_count": len(blocks),
+            "blocks": blocks,
+        }
+
+    @app.get("/api/base-schedules/detail")
+    def base_schedule_detail(path: str = "") -> dict[str, Any]:
+        return _base_schedule_detail_response(path)
+
+    @app.post("/api/base-schedules/view")
+    def base_schedule_view(payload: BaseSchedulePathPayload) -> dict[str, Any]:
+        return _base_schedule_detail_response(payload.path)
+
     @app.post("/api/schedule/analyze-rules")
     def analyze_rules(payload: BlocksPayload) -> dict[str, Any]:
         rules = analyze_schedule_rules(payload.blocks, catalog_rows=payload.catalog_rows)
@@ -365,22 +469,32 @@ def create_app() -> FastAPI:
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
-    @app.post("/api/schedule/download-package")
-    def download_schedule_package(payload: DownloadSchedulePayload) -> StreamingResponse:
+    @app.post("/api/schedule/export-to-downloads")
+    def export_schedule_to_downloads(payload: DownloadSchedulePayload) -> dict[str, Any]:
         week_count = _bounded_week_count(payload.week_count)
         station_label = _station_label(payload.station_id)
-        data = _build_download_package(
-            payload.blocks,
-            notes=payload.notes,
-            station_id=payload.station_id,
-            week_monday=payload.week_monday,
-            week_count=week_count,
+        folder_name = _downloads_export_folder_name(payload.station_id, payload.week_monday)
+        export_dir = _user_downloads_directory() / folder_name
+        export_dir.mkdir(parents=True, exist_ok=True)
+        binge_path = export_dir / f"{station_label}.xlsx"
+        grids_path = export_dir / f"{station_label} GRIDS.xlsx"
+        notes_path = export_dir / "Warnings and Notes.csv"
+        binge_path.write_bytes(_build_binge_preview_workbook(payload.blocks, station_id=payload.station_id))
+        grids_path.write_bytes(
+            _build_grids_preview_workbook(
+                payload.blocks,
+                station_id=payload.station_id,
+                week_monday=payload.week_monday,
+                week_count=week_count,
+            )
         )
-        return StreamingResponse(
-            BytesIO(data),
-            media_type="application/zip",
-            headers={"Content-Disposition": f'attachment; filename="{station_label} Reports.zip"'},
-        )
+        notes_path.write_text(_notes_csv(payload.notes, station_id=payload.station_id), encoding="utf-8")
+        return {
+            "saved": True,
+            "directory": export_dir.as_posix(),
+            "folder_name": folder_name,
+            "files": [binge_path.as_posix(), grids_path.as_posix(), notes_path.as_posix()],
+        }
 
     @app.post("/api/schedule/auto-generate")
     def auto_generate_schedule(payload: AutoGeneratePayload) -> dict[str, Any]:
@@ -420,6 +534,7 @@ def create_app() -> FastAPI:
             blocks=payload.blocks,
             suggested_rules=payload.suggested_rules,
             notes=payload.notes,
+            saved_directory=payload.saved_directory,
         )
         return {
             "saved": True,
@@ -483,12 +598,24 @@ def _save_builder_base_schedule(
     blocks: list[dict[str, Any]],
     suggested_rules: list[dict[str, Any]],
     notes: list[dict[str, Any]],
+    saved_directory: str = "",
 ) -> Path:
     safe_station = _safe_station_id(station_id)
     created_at = datetime.now()
-    save_dir = _saved_schedule_dir(safe_station, created_at)
+    overwrite_raw = str(saved_directory or "").strip()
+    if overwrite_raw:
+        save_dir = Path(overwrite_raw).expanduser().resolve()
+        root = _saved_schedules_root().resolve()
+        if save_dir != root and root not in save_dir.parents:
+            raise HTTPException(
+                status_code=400,
+                detail="Save directory must be inside the configured schedules folder.",
+            )
+        save_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        save_dir = _saved_schedule_dir(safe_station, created_at)
+        save_dir.mkdir(parents=True, exist_ok=True)
     path = save_dir / "base_schedule.yaml"
-    save_dir.mkdir(parents=True, exist_ok=True)
     source = _base_schedule_source_config()
     base = {
         "gracenote_binge_id": int(source.get("gracenote_binge_id", 0) or 0),
@@ -528,6 +655,9 @@ def _save_builder_base_schedule(
     )
     (save_dir / "Warnings and Notes.csv").write_text(_notes_csv(notes, station_id=station_id), encoding="utf-8")
     _save_auto_cursors(save_dir / f"episode_cursors_{safe_station}.json", _seed_cursors_from_template(blocks, _catalog_episodes_by_show()))
+    from binge_schedule.app_settings import mirror_saved_schedule_dir
+
+    mirror_saved_schedule_dir(save_dir)
     return path
 
 
@@ -595,24 +725,18 @@ def _build_grids_preview_workbook(
     return _workbook_bytes(wb)
 
 
-def _build_download_package(
-    blocks: list[dict[str, Any]],
-    *,
-    notes: list[dict[str, Any]],
-    station_id: str = "",
-    week_monday: date,
-    week_count: int,
-) -> bytes:
-    out = BytesIO()
+def _user_downloads_directory() -> Path:
+    downloads = Path.home() / "Downloads"
+    downloads.mkdir(parents=True, exist_ok=True)
+    return downloads
+
+
+def _downloads_export_folder_name(station_id: str, week_monday: date) -> str:
     station_label = _station_label(station_id)
-    with ZipFile(out, "w", ZIP_DEFLATED) as archive:
-        archive.writestr(f"{station_label}.xlsx", _build_binge_preview_workbook(blocks, station_id=station_id))
-        archive.writestr(
-            f"{station_label} GRIDS.xlsx",
-            _build_grids_preview_workbook(blocks, station_id=station_id, week_monday=week_monday, week_count=week_count),
-        )
-        archive.writestr("Warnings and Notes.csv", _notes_csv(notes, station_id=station_id))
-    return out.getvalue()
+    date_label = f"{week_monday.month}-{week_monday.day}-{week_monday.year}"
+    raw = f"{station_label} {date_label}"
+    cleaned = "".join(ch for ch in raw if ch not in '<>:"/\\|?*')
+    return cleaned.strip() or "Schedule Export"
 
 
 def _notes_csv(notes: list[dict[str, Any]], *, station_id: str = "") -> str:
@@ -775,18 +899,51 @@ def _base_schedule_source_config() -> dict[str, Any]:
     return {}
 
 
+def _normalize_schedule_path_key(path: Path) -> str:
+    try:
+        return path.resolve().as_posix().casefold()
+    except OSError:
+        return path.as_posix().casefold()
+
+
+def _delete_builder_base_schedule(raw_path: str) -> str:
+    base = _load_builder_base_schedule(raw_path)
+    schedule_file = base["path"].resolve()
+    save_dir = schedule_file.parent
+    root = _saved_schedules_root().resolve()
+    if save_dir != root and root not in save_dir.parents:
+        raise HTTPException(
+            status_code=400,
+            detail="Only schedules inside the configured save folder can be deleted.",
+        )
+    if not save_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Saved schedule folder not found")
+    shutil.rmtree(save_dir)
+    return save_dir.as_posix()
+
+
 def _load_builder_base_schedule(raw_path: str = "") -> dict[str, Any]:
     schedules = _builder_base_schedules()
     selected: Path | None = None
     if raw_path.strip():
         requested = Path(raw_path.strip())
+        requested_key = _normalize_schedule_path_key(requested)
         for item in schedules:
             path = Path(str(item.get("path") or ""))
-            if path == requested or path.as_posix() == requested.as_posix():
+            if _normalize_schedule_path_key(path) == requested_key:
+                selected = path
+                break
+            if path.name == "base_schedule.yaml" and str(path.as_posix()).casefold().endswith(
+                requested.as_posix().casefold()
+            ):
                 selected = path
                 break
         if selected is None and requested.is_file() and requested.name == "base_schedule.yaml":
             selected = requested
+        if selected is None:
+            cwd_candidate = (Path.cwd() / requested).resolve()
+            if cwd_candidate.is_file():
+                selected = cwd_candidate
     elif schedules:
         ready = [item for item in schedules if item.get("ready_to_generate")]
         if ready:

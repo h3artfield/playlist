@@ -11,6 +11,7 @@ export type ScheduleApiHealth = {
     auto_generate_weeks?: boolean
     auto_generate_date_shift?: boolean
     content_import_wizard?: boolean
+    desktop_runtime?: boolean
   }
 }
 

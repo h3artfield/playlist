@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Schedule Builder</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #000;
+      }
+
+      video {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        background: #000;
+      }
+
+      .skip-hint {
+        position: fixed;
+        right: 16px;
+        bottom: 14px;
+        margin: 0;
+        padding: 6px 10px;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.55);
+        color: rgba(255, 255, 255, 0.85);
+        font: 13px/1.3 system-ui, sans-serif;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <video id="splash" src="/splash.mp4" autoplay playsinline></video>
+    <p class="skip-hint">Press Esc or click to skip</p>
+    <script>
+      const appUrl = '/'
+      const video = document.getElementById('splash')
+      let opened = false
+
+      function openApp() {
+        if (opened) return
+        opened = true
+        window.location.replace(appUrl)
+      }
+
+      video.addEventListener('ended', openApp)
+      video.addEventListener('error', openApp)
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') openApp()
+      })
+      document.addEventListener('click', openApp)
+      video.play().catch(openApp)
+    </script>
+  </body>
+</html>

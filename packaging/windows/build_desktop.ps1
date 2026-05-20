@@ -16,6 +16,23 @@ python -m pip install --upgrade pip
 python -m pip install -r "$Root\requirements.txt"
 python -m pip install pyinstaller
 
+$iconIco = "$Root\packaging\windows\ScheduleBuilder.ico"
+$iconPng = "$Root\packaging\windows\ScheduleBuilder.png"
+if (Test-Path $iconPng) {
+    Write-Host "Building Windows app icon..."
+    python -m pip install Pillow
+    python "$Root\scripts\build_app_icon.py"
+}
+
+$splashSrc = "$Root\packaging\windows\assets\splash.mp4"
+$splashPublic = "$Root\scheduler-ui\public\splash.mp4"
+if (Test-Path $splashSrc) {
+    Copy-Item $splashSrc $splashPublic -Force
+    Write-Host "Copied splash video into scheduler-ui/public/splash.mp4"
+} elseif (-not (Test-Path $splashPublic)) {
+    Write-Warning "No splash.mp4 found. Add packaging/windows/assets/splash.mp4 for the desktop intro video."
+}
+
 if (Test-Path "$Root\scheduler-ui\package.json") {
     Push-Location "$Root\scheduler-ui"
     if (Test-Path "package-lock.json") {
@@ -49,6 +66,9 @@ $args = @(
     "--hidden-import", "multipart",
     "--hidden-import", "fastapi",
     "--hidden-import", "uvicorn",
+    "--hidden-import", "webview",
+    "--hidden-import", "binge_schedule.desktop_window",
+    "--collect-submodules", "webview",
     "--hidden-import", "starlette",
     "--hidden-import", "pydantic",
     "--collect-all", "streamlit",
@@ -60,6 +80,10 @@ $args = @(
     "--collect-all", "openpyxl",
     "desktop_launcher.py"
 )
+
+if (Test-Path $iconIco) {
+    $args += @("--icon", "packaging\windows\ScheduleBuilder.ico")
+}
 
 if (Test-Path "$Root\cloud") {
     $args += @("--add-data", "cloud;cloud")

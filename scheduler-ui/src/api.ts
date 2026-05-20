@@ -21,6 +21,14 @@ export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T>
   })
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
+    try {
+      const parsed = JSON.parse(detail) as { detail?: string }
+      if (typeof parsed.detail === 'string' && parsed.detail.trim()) {
+        throw new Error(parsed.detail)
+      }
+    } catch (inner) {
+      if (inner instanceof Error && inner.message !== detail) throw inner
+    }
     throw new Error(detail || `HTTP ${response.status}`)
   }
   return response.json() as Promise<T>

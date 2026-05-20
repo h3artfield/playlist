@@ -8,7 +8,7 @@ import type {
   EventContentArg,
   EventInput,
 } from '@fullcalendar/core'
-import { fetchCatalog, fetchJson } from './api'
+import { fetchCatalog, fetchJson, formatFetchError } from './api'
 import { draftStorageKey, normalizeWeekCount } from './scheduleImport'
 import './SchedulerApp.css'
 
@@ -386,6 +386,20 @@ function episodeLabelFromBlock(block: ScheduledBlock): string {
   return [block.episodeCode, block.episodeTitle].filter(Boolean).join(' - ')
 }
 
+function formatBlockAirSlot(block: ScheduledBlock): string {
+  const start = new Date(block.start)
+  const end = new Date(block.end)
+  return `${formatShortDate(start)} ${formatClock(start)}–${formatClock(end)}`
+}
+
+function blocksShareCalendarDay(a: ScheduledBlock, b: ScheduledBlock): boolean {
+  return localDateKey(new Date(a.start)) === localDateKey(new Date(b.start))
+}
+
+function blocksAirBackToBack(earlier: ScheduledBlock, later: ScheduledBlock): boolean {
+  return new Date(earlier.end).getTime() === new Date(later.start).getTime()
+}
+
 function gridPreviewShowName(value: string | null): string {
   const text = String(value || '').trim()
   if (!text) return ''
@@ -592,10 +606,13 @@ async function downloadScheduleWorkbook(kind: 'binge' | 'grids', result: Generat
   URL.revokeObjectURL(url)
 }
 
-async function downloadSchedulePackage(result: GenerateResult, weekMonday: Date, notes: ScheduleNote[]): Promise<void> {
-  const response = await fetch('/api/schedule/download-package', {
+async function exportScheduleToDownloads(
+  result: GenerateResult,
+  weekMonday: Date,
+  notes: ScheduleNote[],
+): Promise<{ directory: string; folder_name: string; files: string[] }> {
+  return fetchJson<{ directory: string; folder_name: string; files: string[] }>('/api/schedule/export-to-downloads', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       station_id: result.stationId,
       week_monday: weekMonday.toISOString().slice(0, 10),
@@ -604,20 +621,6 @@ async function downloadSchedulePackage(result: GenerateResult, weekMonday: Date,
       notes,
     }),
   })
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '')
-    throw new Error(detail || `Download failed: HTTP ${response.status}`)
-  }
-  const blob = await response.blob()
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  const label = stationReportLabel(result.stationId)
-  link.href = url
-  link.download = `${label} Reports.zip`
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-  URL.revokeObjectURL(url)
 }
 
 function csvEscape(value: string | number): string {
@@ -720,19 +723,42 @@ function buildScheduleNotes(blocks: ScheduledBlock[], episodes: Episode[]): Sche
     }
 
     for (const groupBlocks of twoPartGroups.values()) {
-      const partNumbers = new Set(groupBlocks.map((block) => twoPartNumber(block)))
-      const labels = groupBlocks.map(episodeLabelFromBlock).filter(Boolean).join(', ')
-      if (partNumbers.has(1) && partNumbers.has(2)) {
-        notes.push({
-          kind: 'info',
-          show,
-          message: `${show} has a two-part episode scheduled: ${labels}.`,
-        })
+      const part1 = groupBlocks.find((block) => twoPartNumber(block) === 1)
+      const part2 = groupBlocks.find((block) => twoPartNumber(block) === 2)
+      if (part1 && part2) {
+        const first = new Date(part1.start) <= new Date(part2.start) ? part1 : part2
+        const second = first === part1 ? part2 : part1
+        const part1Slot = formatBlockAirSlot(part1)
+        const part2Slot = formatBlockAirSlot(part2)
+        const part1Label = episodeLabelFromBlock(part1)
+        const part2Label = episodeLabelFromBlock(part2)
+        if (!blocksShareCalendarDay(part1, part2)) {
+          notes.push({
+            kind: 'warning',
+            show,
+            message: `${show} two-part episode is not scheduled to air on the same day. Part 1: ${part1Slot} (${part1Label}). Part 2: ${part2Slot} (${part2Label}).`,
+          })
+        } else if (blocksAirBackToBack(first, second)) {
+          notes.push({
+            kind: 'info',
+            show,
+            message: `${show} two-part episode airs back to back on ${formatShortDate(new Date(first.start))}: Part 1 ${part1Slot}; Part 2 ${part2Slot}.`,
+          })
+        } else {
+          notes.push({
+            kind: 'warning',
+            show,
+            message: `${show} two-part episode is on the same day but not back to back. Part 1: ${part1Slot} (${part1Label}). Part 2: ${part2Slot} (${part2Label}).`,
+          })
+        }
       } else {
+        const scheduled = part1 || part2
+        const partNumber = part1 ? 1 : 2
+        if (!scheduled) continue
         notes.push({
           kind: 'warning',
           show,
-          message: `${show} has part of a two-part episode scheduled (${labels}). Confirm the matching part is also placed.`,
+          message: `${show} has only Part ${partNumber} scheduled on ${formatBlockAirSlot(scheduled)} (${episodeLabelFromBlock(scheduled)}). Confirm the matching part is also placed.`,
         })
       }
     }
@@ -746,14 +772,24 @@ function buildScheduleNotes(blocks: ScheduledBlock[], episodes: Episode[]): Sche
       .filter((item): item is { block: ScheduledBlock; position: number } => item.position !== null)
     if (!positions.length) continue
 
-    const lastPosition = Math.max(...positions.map((item) => item.position))
-    const remaining = catalog.count - lastPosition - 1
+    const lastScheduled = positions.reduce((best, item) => (item.position > best.position ? item : best))
+    const remaining = catalog.count - lastScheduled.position - 1
     if (remaining >= 0 && remaining <= 10) {
-      notes.push({
-        kind: 'warning',
-        show,
-        message: `${show} is within ${remaining} episode${remaining === 1 ? '' : 's'} of the end of available content.`,
-      })
+      const lastSlot = formatBlockAirSlot(lastScheduled.block)
+      const lastLabel = episodeLabelFromBlock(lastScheduled.block)
+      if (remaining === 0) {
+        notes.push({
+          kind: 'warning',
+          show,
+          message: `${show} completes available content on ${lastSlot} (${lastLabel}).`,
+        })
+      } else {
+        notes.push({
+          kind: 'warning',
+          show,
+          message: `${show} has ${remaining} episode${remaining === 1 ? '' : 's'} left in catalog after ${lastLabel} on ${lastSlot}.`,
+        })
+      }
     }
 
     for (const [prev, next] of positions.map((item) => item.position).entries()) {
@@ -838,6 +874,7 @@ export default function SchedulerApp({
   }
   const initialDraft = initialDraftRef.current
   const showNewScheduleSetup = importKey == null
+  const fromAutoGenerate = importKey != null
 
   const [blocks, setBlocks] = useState<ScheduledBlock[]>(() => initialDraft?.blocks || [])
   const [selectedRanges, setSelectedRanges] = useState<TimeRange[]>([])
@@ -864,11 +901,12 @@ export default function SchedulerApp({
     setVisibleWeekIndex(0)
     setGenerateResult(null)
     setViewMode('builder')
+    setLastSavedDirectory('')
   }, [importKey])
+
   const [catalogEpisodes, setCatalogEpisodes] = useState<Episode[]>([])
   const [, setCatalogStatus] = useState('Loading normalized content...')
   const [contentMenuOpen, setContentMenuOpen] = useState(false)
-  const [generateStatus, setGenerateStatus] = useState('Ready to analyze schedule draft.')
   const [generateNotice, setGenerateNotice] = useState('')
   const [generateNoticeKind, setGenerateNoticeKind] = useState<'info' | 'success' | 'error'>('info')
   const [suggestedRules, setSuggestedRules] = useState<SuggestedRule[]>([])
@@ -877,6 +915,7 @@ export default function SchedulerApp({
   const [generateResult, setGenerateResult] = useState<GenerateResult | null>(null)
   const [viewMode, setViewMode] = useState<'builder' | 'results'>('builder')
   const [resultWeekIndex, setResultWeekIndex] = useState(0)
+  const [lastSavedDirectory, setLastSavedDirectory] = useState('')
   const [isSavingBase, setIsSavingBase] = useState(false)
   const [downloadStatus, setDownloadStatus] = useState('')
   const contentInputRef = useRef<HTMLInputElement | null>(null)
@@ -906,10 +945,12 @@ export default function SchedulerApp({
     [selectableEpisodes, matchingShow],
   )
 
-  const selectedMinutes = selectedRangeDurations.reduce((total, minutes) => total + minutes, 0)
+  const activeRanges = selectedRanges.length ? selectedRanges : liveSelectionRanges
+  const activeRangeDurations = activeRanges.map((range) => minutesBetween(range.start, range.end))
+  const selectedMinutes = activeRangeDurations.reduce((total, minutes) => total + minutes, 0)
   const selectedSlots = Math.floor(selectedMinutes / 30)
-  const selectedRange = selectedRanges[0] || null
-  const selectedLastRange = selectedRanges[selectedRanges.length - 1] || null
+  const selectedRange = activeRanges[0] || null
+  const selectedLastRange = activeRanges[activeRanges.length - 1] || null
   const inferredStartingEpisode = useMemo(() => {
     if (!matchingShow || !selectedRanges.length || !episodesForShow.length) return null
     const selectionStart = selectedRanges.reduce(
@@ -1141,8 +1182,7 @@ export default function SchedulerApp({
 
   function handleSelectAllow(arg: { start: Date; end: Date }) {
     const normalized = normalizeSelection(arg.start, arg.end)
-    const preview = normalized.length > 1 ? normalized : []
-    setLiveSelectionRanges((prev) => (sameTimeRanges(prev, preview) ? prev : preview))
+    setLiveSelectionRanges((prev) => (sameTimeRanges(prev, normalized) ? prev : normalized))
     return true
   }
 
@@ -1157,21 +1197,51 @@ export default function SchedulerApp({
     return selectedBlockIdSet.has(arg.event.id) ? ['selected-schedule-event'] : []
   }
 
-  async function generateScheduleDraft() {
+  function directoryFromSavePath(savePath: string): string {
+    const normalized = savePath.replace(/\\/g, '/')
+    const index = normalized.lastIndexOf('/')
+    return index >= 0 ? normalized.slice(0, index) : normalized
+  }
+
+  async function saveAndOpenPreview() {
     if (!blocks.length) {
-      setGenerateStatus('Add at least one block before generating.')
-      setGenerateNotice('Add at least one scheduled block before generating.')
+      setGenerateNotice('Add at least one scheduled block before saving.')
       setGenerateNoticeKind('error')
       setSuggestedRules([])
       setMissingSlotCount(null)
       return
     }
+    const payloadBlocks = payloadFromBlocks(blocks)
+    const notes = buildScheduleNotes(blocks, availableEpisodes)
+    setIsSavingBase(true)
     setIsGenerating(true)
-    setGenerateStatus('Sending draft to local Python API...')
-    setGenerateNotice('Analyzing schedule draft...')
+    setGenerateNotice('Saving schedule and building preview...')
     setGenerateNoticeKind('info')
     try {
-      const payloadBlocks = payloadFromBlocks(blocks)
+      const missingSlotTotal = await countMissingSlots(payloadBlocks)
+      if (missingSlotTotal > 0) {
+        setGenerateNotice(
+          `Schedule has ${missingSlotTotal.toLocaleString()} empty half-hour slot${missingSlotTotal === 1 ? '' : 's'}. Fill them before saving.`,
+        )
+        setGenerateNoticeKind('error')
+        return
+      }
+      const savePayload = await fetchJson<{ label: string; path: string }>('/api/base-schedules/save', {
+        method: 'POST',
+        body: JSON.stringify({
+          station_id: stationId || '',
+          week_monday: baseCalendarStart.toISOString().slice(0, 10),
+          week_count: scheduleLengthWeeks,
+          blocks: payloadBlocks,
+          suggested_rules: suggestedRules,
+          notes,
+          saved_directory: lastSavedDirectory || undefined,
+        }),
+      })
+      const savedDirectory = directoryFromSavePath(savePayload.path)
+      setLastSavedDirectory(savedDirectory)
+      onBaseSaved?.(savePayload.path)
+
       const [rulesPayload, gridPayload] = await Promise.all([
         fetchJson<{ rule_count: number; rules: SuggestedRule[] }>('/api/schedule/analyze-rules', {
           method: 'POST',
@@ -1190,18 +1260,16 @@ export default function SchedulerApp({
           ),
         ),
       ])
-      const missingSlotTotal = gridPayload.reduce((total, payload) => total + payload.missing_slot_count, 0)
+      const analyzedMissingSlots = gridPayload.reduce((total, payload) => total + payload.missing_slot_count, 0)
       const rules = rulesPayload.rules || []
-      const notes = buildScheduleNotes(blocks, availableEpisodes)
-      setSuggestedRules(rules)
-      setMissingSlotCount(missingSlotTotal)
-      const missingText = `${missingSlotTotal.toLocaleString()} empty half-hour slot${
-        missingSlotTotal === 1 ? '' : 's'
-      }`
-      const ruleText = `${rulesPayload.rule_count} rule suggestion${rulesPayload.rule_count === 1 ? '' : 's'}`
-      setGenerateStatus(
-        `Draft analyzed: ${rulesPayload.rule_count} rule suggestion${rulesPayload.rule_count === 1 ? '' : 's'} found.`,
+      const totalMinutes = scheduleLengthWeeks * 7 * 24 * 60
+      const filledMinutes = blocks.reduce(
+        (acc, block) => acc + minutesBetween(new Date(block.start), new Date(block.end)),
+        0,
       )
+      const filledPercent = totalMinutes ? Math.round((filledMinutes / totalMinutes) * 100) : 0
+      setSuggestedRules(rules)
+      setMissingSlotCount(analyzedMissingSlots)
       setGenerateResult({
         generatedAt: new Date().toISOString(),
         stationId: stationId || '',
@@ -1211,52 +1279,38 @@ export default function SchedulerApp({
         grids: gridPayload,
         rules,
         notes,
-        missingSlotTotal,
+        missingSlotTotal: analyzedMissingSlots,
       })
       setResultWeekIndex(0)
       setViewMode('results')
-      setGenerateNotice(`Schedule analyzed. ${missingText}. ${ruleText} found.`)
-      setGenerateNoticeKind(missingSlotTotal === 0 ? 'success' : 'info')
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Generate failed.'
-      setGenerateStatus(error instanceof Error ? `Generate failed: ${error.message}` : 'Generate failed.')
-      setGenerateNotice(`Generate failed: ${message}`)
-      setGenerateNoticeKind('error')
-      setSuggestedRules([])
-      setMissingSlotCount(null)
-    } finally {
-      setIsGenerating(false)
-    }
-  }
-
-  async function saveGeneratedBaseSchedule() {
-    if (!generateResult || generateResult.missingSlotTotal > 0) return
-    const notes = buildScheduleNotes(generateResult.payloadBlocks, availableEpisodes)
-    setIsSavingBase(true)
-    setGenerateNotice('Saving reviewed schedule as base schedule...')
-    setGenerateNoticeKind('info')
-    try {
-      const savePayload = await fetchJson<{ label: string; path: string }>('/api/base-schedules/save', {
-        method: 'POST',
-        body: JSON.stringify({
-          station_id: generateResult.stationId,
-          week_monday: baseCalendarStart.toISOString().slice(0, 10),
-          week_count: generateResult.weekCount,
-          blocks: generateResult.payloadBlocks,
-          suggested_rules: generateResult.rules,
-          notes,
-        }),
-      })
-      onBaseSaved?.(savePayload.path)
-      setGenerateNotice(`Schedule saved as ${savePayload.label}.`)
-      setGenerateNoticeKind('success')
+      setGenerateNotice(`Schedule saved. ${filledPercent}% filled.`)
+      setGenerateNoticeKind(analyzedMissingSlots === 0 ? 'success' : 'info')
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Save failed.'
       setGenerateNotice(`Save failed: ${message}`)
       setGenerateNoticeKind('error')
+      setSuggestedRules([])
+      setMissingSlotCount(null)
     } finally {
       setIsSavingBase(false)
+      setIsGenerating(false)
     }
+  }
+
+  async function countMissingSlots(payloadBlocks: GenerateResult['payloadBlocks']): Promise<number> {
+    const gridPayload = await Promise.all(
+      scheduleWeekStarts.map((weekStart) =>
+        fetchJson<GridPayload>('/api/schedule/blocks-to-grid', {
+          method: 'POST',
+          body: JSON.stringify({
+            week_monday: weekStart.toISOString().slice(0, 10),
+            blocks: payloadBlocks,
+            require_complete: false,
+          }),
+        }),
+      ),
+    )
+    return gridPayload.reduce((total, payload) => total + payload.missing_slot_count, 0)
   }
 
   async function downloadGeneratedReport(kind: 'binge' | 'grids') {
@@ -1272,15 +1326,21 @@ export default function SchedulerApp({
     }
   }
 
-  async function downloadGeneratedPackage(notes: ScheduleNote[]) {
+  async function downloadGeneratedReports(notes: ScheduleNote[]) {
     if (!generateResult) return
-    setDownloadStatus('Preparing report download...')
+    setDownloadStatus('Saving files to Downloads…')
     try {
-      await downloadSchedulePackage(generateResult, baseCalendarStart, notes)
-      setDownloadStatus('')
+      const exported = await exportScheduleToDownloads(generateResult, baseCalendarStart, notes)
+      const names = exported.files.map((path) => path.split(/[/\\]/).pop() || path)
+      setDownloadStatus(
+        `Saved to Downloads/${exported.folder_name}/ — ${names.join(', ')}`,
+      )
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Download failed.'
-      setDownloadStatus(message)
+      const message = formatFetchError(error)
+      const hint = message.includes('404') || message.toLowerCase().includes('not found')
+        ? ' Restart the dev API: .\\scripts\\start-dev-api.ps1'
+        : ''
+      setDownloadStatus(`Download failed: ${message}${hint}`)
     }
   }
 
@@ -1292,46 +1352,25 @@ export default function SchedulerApp({
     const resultBlocks = [...generateResult.payloadBlocks].sort(
       (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime(),
     )
-    const filledPercent = Math.round((totals.filledMinutes / totals.totalMinutes) * 100)
-    const canSave = generateResult.missingSlotTotal === 0
-
     return (
       <main className="scheduler-shell">
         <header className="topbar">
           <div>
             {stationId ? <p className="station-context">Station ID: {stationId}</p> : null}
-            <p className="subhead">Review the generated schedule report, grid preview, warnings, and suggested rules before saving.</p>
+            <p className="subhead">Review the schedule report, grid preview, and warnings. Go back to adjust, or download the files.</p>
           </div>
           <div className="topbar-actions">
             <button className="ghost-action" type="button" onClick={() => setViewMode('builder')}>
               Back to Schedule
             </button>
-            <button className="ghost-action" type="button" onClick={() => downloadGeneratedPackage(displayedNotes)}>
-              Download Reports.zip
-            </button>
-            <button className="primary-action" type="button" disabled={!canSave || isSavingBase} onClick={saveGeneratedBaseSchedule}>
-              {isSavingBase ? 'Saving...' : 'Save Schedule'}
+            <button className="primary-action" type="button" onClick={() => downloadGeneratedReports(displayedNotes)}>
+              Download files
             </button>
           </div>
         </header>
 
         {generateNotice ? <div className={`generate-notice ${generateNoticeKind}`}>{generateNotice}</div> : null}
         {downloadStatus ? <p className="download-status">{downloadStatus}</p> : null}
-
-        <section className="results-summary">
-          <div className="result-metric">
-            <span>Filled</span>
-            <strong>{filledPercent}%</strong>
-          </div>
-          <div className="result-metric">
-            <span>Empty half-hours</span>
-            <strong>{generateResult.missingSlotTotal.toLocaleString()}</strong>
-          </div>
-          <div className="result-metric">
-            <span>Notes</span>
-            <strong>{displayedNotes.length.toLocaleString()}</strong>
-          </div>
-        </section>
 
         <section className="results-grid">
           <article className="result-card wide-result">
@@ -1344,7 +1383,7 @@ export default function SchedulerApp({
                 Download {reportLabel}.xlsx
               </button>
             </div>
-            <div className="report-table-wrap">
+            <div className="report-table-wrap" role="region" aria-label={`${reportLabel} schedule preview`} tabIndex={0}>
               <table className="report-table">
                 <thead>
                   <tr>
@@ -1476,7 +1515,11 @@ export default function SchedulerApp({
       <header className="topbar">
         <div>
           {stationId ? <p className="station-context">Station ID: {stationId}</p> : null}
-          <p className="subhead">Drag across the calendar to highlight time, type a show, then fill the time slots in episode order.</p>
+          <p className="subhead">
+            {fromAutoGenerate
+              ? 'Adjust the auto-generated schedule if needed, then click Save Schedule to save and open the download preview.'
+              : 'Drag across the calendar to highlight time, type a show, then fill the time slots. Click Save Schedule when ready.'}
+          </p>
           <p className="autosave-note">Draft autosaves in this browser while you build.</p>
         </div>
         <div className="topbar-actions">
@@ -1485,8 +1528,13 @@ export default function SchedulerApp({
               Back
             </button>
           ) : null}
-          <button className="primary-action" type="button" disabled={isGenerating} onClick={generateScheduleDraft}>
-            {isGenerating ? 'Analyzing...' : 'Generate Schedule'}
+          <button
+            className="primary-action"
+            type="button"
+            disabled={isGenerating || isSavingBase}
+            onClick={saveAndOpenPreview}
+          >
+            {isGenerating || isSavingBase ? 'Saving...' : 'Save Schedule'}
           </button>
         </div>
       </header>
@@ -1637,7 +1685,10 @@ export default function SchedulerApp({
             <p className="panel-title">Selected time slot</p>
             {selectedRange ? (
               <div className="selected-range">
-                <strong>{selectedSlots} half-hours</strong>
+                <strong>
+                  {selectedSlots} half-hour{selectedSlots === 1 ? '' : 's'}
+                  {liveSelectionRanges.length && !selectedRanges.length ? ' (preview)' : ''}
+                </strong>
                 <span>
                   {selectedRange.start.toLocaleString([], {
                     weekday: 'short',
@@ -1651,7 +1702,9 @@ export default function SchedulerApp({
                     minute: '2-digit',
                   })}
                 </span>
-                {selectedRanges.length > 1 ? <span>{selectedRanges.length} matching day/time selections</span> : null}
+                {activeRanges.length > 1 ? (
+                  <span>{activeRanges.length} matching day/time selections</span>
+                ) : null}
               </div>
             ) : selectedBlockIds.length ? (
               <div className="selected-range">
@@ -1784,25 +1837,25 @@ export default function SchedulerApp({
             ))}
           </div>
 
-          <div className="panel-section">
-            <p className="panel-title">Backend analysis</p>
-            <p className="muted">{generateStatus}</p>
-            {missingSlotCount !== null ? (
-              <div className="metric-row quiet">
-                <span>Empty half-hours</span>
-                <strong>{missingSlotCount.toLocaleString()}</strong>
-              </div>
-            ) : null}
-            {suggestedRules.slice(0, 5).map((rule) => (
-              <div className="rule-card" key={`${rule.rule_type}-${rule.show}-${rule.summary}`}>
-                <strong>{rule.show}</strong>
-                <span>{rule.summary}</span>
-                <small>
-                  {rule.rule_type} · {Math.round(rule.confidence * 100)}% confidence
-                </small>
-              </div>
-            ))}
-          </div>
+          {missingSlotCount !== null || suggestedRules.length > 0 ? (
+            <div className="panel-section">
+              {missingSlotCount !== null ? (
+                <div className="metric-row quiet">
+                  <span>Empty half-hours</span>
+                  <strong>{missingSlotCount.toLocaleString()}</strong>
+                </div>
+              ) : null}
+              {suggestedRules.slice(0, 5).map((rule) => (
+                <div className="rule-card" key={`${rule.rule_type}-${rule.show}-${rule.summary}`}>
+                  <strong>{rule.show}</strong>
+                  <span>{rule.summary}</span>
+                  <small>
+                    {rule.rule_type} · {Math.round(rule.confidence * 100)}% confidence
+                  </small>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </aside>
       </section>
     </main>

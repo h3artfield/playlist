@@ -65,23 +65,34 @@ export function savedScheduleWeekCount(base: {
   return normalizeWeekCount(base.template_week_count || base.week_count || 1)
 }
 
-export function confirmAutoGenerate(savedWeeks: number, generateWeeks: number): boolean {
+export type AutoGenerateConfirmCopy = {
+  title: string
+  lead: string
+  detail: string
+}
+
+/** Copy for the auto-generate confirmation (edit wording here). */
+export function getAutoGenerateConfirmCopy(savedWeeks: number, generateWeeks: number): AutoGenerateConfirmCopy {
   const saved = normalizeWeekCount(savedWeeks)
   const generate = normalizeWeekCount(generateWeeks)
   const savedLabel = formatWeekCountLabel(saved)
   const generateLabel = formatWeekCountLabel(generate)
-  const continuation =
-    'Series episodes continue from where you left off (wrapping at the end of each show). Movies and paid programming stay in the same time slots.'
+  const detail =
+    'Series episodes continue from where they left off (wrapping at the end of each show). Movies and paid programming stay in the same time slots.'
 
   if (generate === saved) {
-    return window.confirm(
-      `The saved schedule is ${savedLabel}.\n\nGenerate the next ${generateLabel} using the same pattern?\n\n${continuation}`,
-    )
+    return {
+      title: 'Auto generate schedule',
+      lead: `The saved schedule is ${savedLabel}. Generate the next ${generateLabel} using the same lineup?`,
+      detail,
+    }
   }
 
-  return window.confirm(
-    `The saved schedule is ${savedLabel}. Are you sure you want to generate ${generateLabel}?\n\n${continuation}`,
-  )
+  return {
+    title: 'Auto generate schedule',
+    lead: `The saved schedule is ${savedLabel}. Generate ${generateLabel}?`,
+    detail,
+  }
 }
 
 export function shiftBlocksToMonday(blocks: ScheduledBlock[], targetMondayIso: string): ScheduledBlock[] {

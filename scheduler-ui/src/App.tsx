@@ -5,14 +5,19 @@ import { checkScheduleApi } from './scheduleApiBase'
 import ContentSheetEditor, { catalogRowsToEditable } from './ContentSheetEditor'
 import ImportWizard from './ImportWizard'
 import type { CommitImportResponse } from './contentImportTypes'
+import AutoGenerateConfirmDialog from './AutoGenerateConfirmDialog'
+import DeleteScheduleDialog from './DeleteScheduleDialog'
 import {
   clearScheduleDraft,
-  confirmAutoGenerate,
   formatScheduleWeekRange,
   formatWeekCountLabel,
+  getAutoGenerateConfirmCopy,
   normalizeAutoGenerateResult,
   savedScheduleWeekCount,
+  type AutoGenerateConfirmCopy,
 } from './scheduleImport'
+import SettingsPanel from './SettingsPanel'
+import { applySettingsToDocument, fetchAppSettings, loadCachedSettings, type AppSettings } from './settings'
 import './App.css'
 
 type PageId = 'create' | 'blank' | 'archive' | 'schedules'
@@ -136,6 +141,13 @@ export default function App() {
   const [savedSchedules, setSavedSchedules] = useState<BaseScheduleSummary[]>([])
   const [selectedSchedule, setSelectedSchedule] = useState<BaseScheduleSummary | null>(null)
   const [schedulesStatus, setSchedulesStatus] = useState('Loading saved schedules...')
+  const [appSettings, setAppSettings] = useState<AppSettings>(() => loadCachedSettings())
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
+  useEffect(() => {
+    applySettingsToDocument(loadCachedSettings())
+    void fetchAppSettings().then(setAppSettings)
+  }, [])
 
   useEffect(() => {
     function requestDesktopShutdown() {
@@ -161,7 +173,7 @@ export default function App() {
       setSelectedSchedule(picked)
       setSchedulesStatus(
         ready.length
-          ? `${ready.length} saved schedule${ready.length === 1 ? '' : 's'} ready for auto-generate. Newest is selected by default.`
+          ? `${ready.length} saved schedule${ready.length === 1 ? '' : 's'} ready for auto-generate. Use Assign to pick the active template.`
           : 'No saved schedules yet. Build one, then use Save Schedule on the results page.',
       )
     } catch {
@@ -186,7 +198,40 @@ export default function App() {
           <span className="brand-kicker">Playlist</span>
           <h1>Schedule Builder</h1>
         </div>
+        <button
+          className="settings-trigger"
+          type="button"
+          aria-label="Open settings"
+          title="Settings"
+          onClick={() => {
+            void fetchAppSettings().then(setAppSettings)
+            setSettingsOpen(true)
+          }}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+        </button>
       </header>
+
+      <SettingsPanel
+        open={settingsOpen}
+        initial={appSettings}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={(settings) => {
+          setAppSettings(settings)
+          void refreshSchedules()
+        }}
+      />
 
       <nav className="top-nav" aria-label="Application sections">
         <div className="segmented-nav">
@@ -245,10 +290,7 @@ export default function App() {
             schedules={savedSchedules}
             selectedPath={selectedSchedule?.path || ''}
             status={schedulesStatus}
-            onSelect={(schedule) => {
-              selectSchedule(schedule)
-              setPage('create')
-            }}
+            onAssign={selectSchedule}
             onRefresh={() => void refreshSchedules()}
           />
         ) : null}
@@ -273,12 +315,17 @@ function CreateSchedulePage({
   const [autoStatus, setAutoStatus] = useState('')
   const [isAutoGenerating, setIsAutoGenerating] = useState(false)
   const [autoGenerateWeeks, setAutoGenerateWeeks] = useState(1)
+  const [autoGenerateConfirm, setAutoGenerateConfirm] = useState<AutoGenerateConfirmCopy | null>(null)
 
   const savedWeeks = activeBase ? savedScheduleWeekCount(activeBase) : 1
 
-  async function autoGenerateSchedule() {
+  function requestAutoGenerate() {
     if (!activeBase) return
-    if (!confirmAutoGenerate(savedWeeks, autoGenerateWeeks)) return
+    setAutoGenerateConfirm(getAutoGenerateConfirmCopy(savedWeeks, autoGenerateWeeks))
+  }
+
+  async function runAutoGenerate() {
+    if (!activeBase) return
 
     setIsAutoGenerating(true)
     setAutoStatus('Loading saved schedule and continuing episodes...')
@@ -369,7 +416,12 @@ function CreateSchedulePage({
                 ))}
               </select>
             </label>
-            <button className="primary-action card-action" type="button" disabled={isAutoGenerating} onClick={autoGenerateSchedule}>
+            <button
+              className="primary-action card-action"
+              type="button"
+              disabled={isAutoGenerating}
+              onClick={requestAutoGenerate}
+            >
               {isAutoGenerating ? 'Generating...' : 'Auto Generate'}
             </button>
           </div>
@@ -387,6 +439,17 @@ function CreateSchedulePage({
           </div>
         </section>
       )}
+
+      {autoGenerateConfirm ? (
+        <AutoGenerateConfirmDialog
+          copy={autoGenerateConfirm}
+          onCancel={() => setAutoGenerateConfirm(null)}
+          onConfirm={() => {
+            setAutoGenerateConfirm(null)
+            void runAutoGenerate()
+          }}
+        />
+      ) : null}
     </main>
   )
 }
@@ -692,19 +755,103 @@ function contentCategoryLabel(category: ContentCategory): string {
   return 'Series'
 }
 
+type ScheduleDetail = {
+  path: string
+  label: string
+  station_id: string
+  week_monday: string
+  week_count: number
+  draft_block_count: number
+  blocks: GeneratedBlock[]
+}
+
+function formatPreviewSlot(iso: string): string {
+  const parsed = new Date(iso)
+  if (Number.isNaN(parsed.getTime())) return iso
+  return parsed.toLocaleString(undefined, {
+    weekday: 'short',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+function previewEpisodeLabel(block: GeneratedBlock): string {
+  const code = block.episodeCode?.trim()
+  const title = block.episodeTitle?.trim()
+  if (code && title) return `${code} — ${title}`
+  return code || title || block.title || '—'
+}
+
 function SchedulesPage({
   schedules,
   selectedPath,
   status,
-  onSelect,
+  onAssign,
   onRefresh,
 }: {
   schedules: BaseScheduleSummary[]
   selectedPath: string
   status: string
-  onSelect: (schedule: BaseScheduleSummary) => void
+  onAssign: (schedule: BaseScheduleSummary) => void
   onRefresh: () => void
 }) {
+  const [viewingPath, setViewingPath] = useState('')
+  const [viewLoadingPath, setViewLoadingPath] = useState('')
+  const [viewError, setViewError] = useState('')
+  const [viewDetail, setViewDetail] = useState<ScheduleDetail | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<BaseScheduleSummary | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+
+  async function confirmDeleteSchedule() {
+    if (!deleteTarget) return
+    setDeleteBusy(true)
+    setDeleteError('')
+    try {
+      await fetchJson<{ deleted: boolean }>('/api/base-schedules/delete', {
+        method: 'POST',
+        body: JSON.stringify({ path: deleteTarget.path }),
+      })
+      if (viewingPath === deleteTarget.path) {
+        setViewingPath('')
+        setViewDetail(null)
+        setViewError('')
+      }
+      setDeleteTarget(null)
+      onRefresh()
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'Could not delete schedule.')
+    } finally {
+      setDeleteBusy(false)
+    }
+  }
+
+  async function toggleView(schedule: BaseScheduleSummary) {
+    if (viewingPath === schedule.path) {
+      setViewingPath('')
+      setViewDetail(null)
+      setViewError('')
+      return
+    }
+    setViewingPath(schedule.path)
+    setViewDetail(null)
+    setViewError('')
+    setViewLoadingPath(schedule.path)
+    try {
+      const detail = await fetchJson<ScheduleDetail>('/api/base-schedules/view', {
+        method: 'POST',
+        body: JSON.stringify({ path: schedule.path }),
+      })
+      setViewDetail(detail)
+    } catch (error) {
+      setViewError(error instanceof Error ? error.message : 'Could not load schedule.')
+    } finally {
+      setViewLoadingPath('')
+    }
+  }
+
   return (
     <main className="app-page schedules-page">
       <section className="page-header schedule-page-header">
@@ -724,23 +871,100 @@ function SchedulesPage({
             const weeks = savedScheduleWeekCount(schedule)
             const range = formatScheduleWeekRange(schedule.week_monday, weeks)
             const isSelected = schedule.path === selectedPath
+            const isViewOpen = viewingPath === schedule.path
+            const isLoadingView = viewLoadingPath === schedule.path
+            const previewBlocks =
+              isViewOpen && viewDetail?.path === schedule.path
+                ? [...viewDetail.blocks].sort((a, b) => String(a.start).localeCompare(String(b.start)))
+                : []
             return (
-              <button
-                key={schedule.path}
-                type="button"
-                className={`schedule-picker-card${isSelected ? ' is-selected' : ''}`}
-                onClick={() => onSelect(schedule)}
-              >
-                <div className="schedule-picker-card-head">
-                  <strong>{schedule.label}</strong>
-                  {isSelected ? <span className="schedule-picker-badge">Active</span> : null}
+              <article className="schedule-picker-item" key={schedule.path}>
+                <div className={`schedule-picker-card${isSelected ? ' is-selected' : ''}`}>
+                  {isSelected ? <span className="schedule-picker-badge">Assigned</span> : null}
+                  <div className="schedule-picker-card-body">
+                    <div className="schedule-picker-card-head">
+                      <strong>{schedule.label}</strong>
+                    </div>
+                    <span>
+                      {formatWeekCountLabel(weeks)}
+                      {range ? ` · ${range}` : ''}
+                    </span>
+                    <small>Saved {scheduleSavedLabel(schedule)}</small>
+                    <div className="schedule-picker-actions">
+                      <button
+                        className={`ghost-action${isViewOpen ? ' active' : ''}`}
+                        type="button"
+                        onClick={() => void toggleView(schedule)}
+                      >
+                        {isViewOpen ? 'Hide' : 'View'}
+                      </button>
+                      <button
+                        className="primary-action schedule-assign-btn"
+                        type="button"
+                        onClick={() => onAssign(schedule)}
+                      >
+                        Assign
+                      </button>
+                    </div>
+                  </div>
+                  <button
+                    className="ghost-action danger-action schedule-picker-delete"
+                    type="button"
+                    aria-label={`Delete ${schedule.label}`}
+                    onClick={() => {
+                      setDeleteError('')
+                      setDeleteTarget(schedule)
+                    }}
+                  >
+                    Delete
+                  </button>
                 </div>
-                <span>
-                  {formatWeekCountLabel(weeks)}
-                  {range ? ` · ${range}` : ''}
-                </span>
-                <small>Saved {scheduleSavedLabel(schedule)}</small>
-              </button>
+                {isViewOpen ? (
+                  <div className="schedule-preview-window" aria-label={`Preview for ${schedule.label}`}>
+                    <div className="schedule-preview-window-head">
+                      <strong>Preview</strong>
+                      {previewBlocks.length ? (
+                        <span className="schedule-preview-meta">
+                          {previewBlocks.length.toLocaleString()} block
+                          {previewBlocks.length === 1 ? '' : 's'}
+                          {viewDetail?.week_monday ? ` · week of ${viewDetail.week_monday}` : ''}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="schedule-preview-window-body">
+                      {isLoadingView ? <p className="muted">Loading schedule…</p> : null}
+                      {viewError && viewingPath === schedule.path ? (
+                        <p className="panel-status-error">{viewError}</p>
+                      ) : null}
+                      {previewBlocks.length ? (
+                        <div className="schedule-preview-table-wrap">
+                          <table className="schedule-preview-table">
+                            <thead>
+                              <tr>
+                                <th>Time</th>
+                                <th>Show</th>
+                                <th>Episode</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {previewBlocks.map((block) => (
+                                <tr key={block.id}>
+                                  <td>{formatPreviewSlot(block.start)}</td>
+                                  <td>{block.show}</td>
+                                  <td>{previewEpisodeLabel(block)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : null}
+                      {!isLoadingView && !viewError && viewingPath === schedule.path && !previewBlocks.length ? (
+                        <p className="muted">No blocks in this saved schedule.</p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </article>
             )
           })}
         </section>
@@ -749,6 +973,22 @@ function SchedulesPage({
           <p className="muted">Save a schedule from the builder results page to use it here for auto-generate.</p>
         </section>
       )}
+
+      {deleteError ? <p className="panel-status-error schedule-delete-error">{deleteError}</p> : null}
+
+      {deleteTarget ? (
+        <DeleteScheduleDialog
+          label={deleteTarget.label}
+          busy={deleteBusy}
+          onCancel={() => {
+            if (!deleteBusy) {
+              setDeleteTarget(null)
+              setDeleteError('')
+            }
+          }}
+          onConfirm={() => void confirmDeleteSchedule()}
+        />
+      ) : null}
     </main>
   )
 }

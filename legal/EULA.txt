@@ -1,0 +1,84 @@
+SCHEDULE BUILDER — END USER LICENSE AGREEMENT (EULA)
+Version 1.0.0 | Last updated: May 2026
+
+IMPORTANT — READ CAREFULLY BEFORE CONTINUING INSTALLATION
+
+By selecting "I accept" in the installer (or by installing, copying, or using
+Schedule Builder, "Software"), you agree to be bound by this End User License
+Agreement. If you do not agree, select "I do not accept" and do not install the
+Software.
+
+You also acknowledge that you are solely responsible for reviewing and verifying
+all schedules before broadcast, including accuracy, paid programming placement,
+and compliance with station policies and applicable law.
+
+DRAFT NOTICE: This agreement is provided for operational use. Have qualified legal
+counsel review and adapt it for your organization before relying on it.
+
+1. LICENSE GRANT
+Subject to your compliance with this EULA, you are granted a limited, non-exclusive,
+non-transferable, revocable license to install and use one copy of the Software on
+Windows computers you own or control, solely for building and managing television
+broadcast schedules for your station or organization.
+
+2. RESTRICTIONS
+You may not: (a) sublicense, sell, rent, lease, or distribute the Software except as
+expressly permitted; (b) reverse engineer, decompile, or disassemble the Software except
+where applicable law expressly allows; (c) remove or alter proprietary notices; (d) use
+the Software to develop a competing product; or (e) use the Software in violation of
+applicable law, broadcast rules, or third-party rights.
+
+3. SCHEDULE ACCURACY AND BROADCAST RESPONSIBILITY
+The Software assists with drafting schedules. YOU ARE SOLELY RESPONSIBLE for reviewing,
+verifying, and approving all schedules, episode placements, runtimes, paid programming
+placement, and compliance with station policies, network requirements, FCC or other
+regulatory obligations, and contractual commitments before air. The Software does not
+guarantee error-free output.
+
+4. DATA AND PRIVACY
+The Software processes schedule and content data locally on your device unless you
+configure external storage or services. You are responsible for securing your data,
+backups, and any paths you select for saved schedules. We do not warrant the security
+of third-party hosting you choose.
+
+5. DISCLAIMER OF WARRANTIES
+THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND,
+WHETHER EXPRESS, IMPLIED, OR STATUTORY, INCLUDING BUT NOT LIMITED TO IMPLIED WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
+WE DO NOT WARRANT THAT THE SOFTWARE WILL BE UNINTERRUPTED, ERROR-FREE, OR FREE OF
+HARMFUL COMPONENTS.
+
+6. LIMITATION OF LIABILITY
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE AUTHORS,
+COPYRIGHT HOLDERS, OR DISTRIBUTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL,
+CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR ANY LOSS OF PROFITS, REVENUE, DATA,
+GOODWILL, OR BUSINESS INTERRUPTION, ARISING FROM OR RELATED TO YOUR USE OF OR INABILITY
+TO USE THE SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES. OUR TOTAL
+AGGREGATE LIABILITY FOR ANY CLAIM ARISING OUT OF THIS EULA OR THE SOFTWARE SHALL NOT
+EXCEED THE GREATER OF (A) THE AMOUNT YOU PAID FOR THE SOFTWARE IN THE TWELVE (12)
+MONTHS BEFORE THE CLAIM, OR (B) FIFTY U.S. DOLLARS (US $50.00).
+
+Some jurisdictions do not allow certain limitations; in those jurisdictions, liability
+is limited to the fullest extent permitted by law.
+
+7. UPDATES
+We may provide updates or changes to the Software. Updated versions may be subject to
+additional or revised terms presented at installation or first launch.
+
+8. TERMINATION
+This license terminates automatically if you breach this EULA. Upon termination, you
+must cease use and uninstall the Software. Sections that by nature should survive
+(including Sections 3, 5, 6, and 9) survive termination.
+
+9. GOVERNING LAW
+This EULA is governed by the laws of the State in which the distributing organization
+is principally located, without regard to conflict-of-law rules, except where mandatory
+consumer protection laws of your jurisdiction apply.
+
+10. ENTIRE AGREEMENT
+This EULA constitutes the entire agreement regarding the Software and supersedes prior
+oral or written understandings on that subject. If any provision is held unenforceable,
+the remaining provisions remain in effect.
+
+By clicking "I agree," checking the acceptance box, or installing the Software, you
+acknowledge that you have read, understood, and agree to this EULA.

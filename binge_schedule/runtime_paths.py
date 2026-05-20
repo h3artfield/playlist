@@ -142,7 +142,9 @@ def catalog_publish_targets() -> list[Path]:
 
 
 def saved_schedules_root() -> Path:
-    return schedule_builder_data_dir() / "saved_schedules"
+    from binge_schedule.app_settings import primary_saved_schedules_root
+
+    return primary_saved_schedules_root()
 
 
 def default_config_path() -> Path:

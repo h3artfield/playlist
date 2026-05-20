@@ -1,0 +1,58 @@
+# Demo / sandbox config bundled with the desktop installer (Schedule Builder 1.0.28+).
+# Pre-loaded for presentations: May 2026 test weeks, sample shows, reference BINGE.
+
+gracenote_binge_id: 45397
+nikki_workbook: "data/2024 Nikki Spreadsheets.xlsx"
+timezone_note: local
+wrap_episodes: true
+
+cursor_state_file: episode_cursors_demo.json
+
+reference_binge_file: "data/MAY 2026 REFERENCE BINGE.xlsx"
+reference_binge_sheet: "5-4-2026"
+reference_binge_all_sheets: true
+reference_binge_sync_cursor_weeks:
+  - "2026-04-27"
+
+reference_binge_literal_copy_before: "2026-05-04"
+build_sequence_start: "2026-05-01"
+
+shows:
+  jim_bowie:
+    display_name: "The Adventures of Jim Bowie"
+    kind: series
+    semantic_group: western
+    nikki_sheet: "2025 JIM BOWIE"
+    prefix: AJB
+    start_episode_index: 60
+    overnight_repeat_after: sunday
+  hunter:
+    display_name: "Hunter"
+    kind: series
+    semantic_group: action_drama
+    nikki_sheet: "Hunter"
+    prefix: HUN
+    binge_row_minutes: 60
+    overnight_repeat_after: daily
+  jump_street:
+    display_name: "21 Jump Street"
+    kind: series
+    semantic_group: action_drama
+    nikki_sheet: "21 Jump Street"
+    prefix: JMP
+    binge_row_minutes: 60
+  paid_programming:
+    display_name: "Paid Programming"
+    kind: literal
+    semantic_group: ministry
+
+weeks:
+  - monday: "2026-05-04"
+    grids_file: "data/MAY 2026 BINGE GRIDS.xlsx"
+    sheet_name: "5-4-2026"
+  - monday: "2026-05-11"
+    grids_file: "data/MAY 2026 BINGE GRIDS.xlsx"
+    sheet_name: "5-11-2026"
+  - monday: "2026-05-18"
+    grids_file: "data/MAY 2026 BINGE GRIDS.xlsx"
+    sheet_name: "5-18-2026"

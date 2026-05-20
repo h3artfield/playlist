@@ -141,7 +141,11 @@ def _write_fresh_blank_schedule_config(source_cfg_path: Path) -> Path:
     return out_path
 
 
-def _render_desktop_download_cta() -> None:
+def _is_desktop_runtime() -> bool:
+    return os.environ.get("SCHEDULE_BUILDER_DESKTOP_RUNTIME") == "1"
+
+
+def _render_blank_schedule_cta() -> None:
     c1, c2 = st.columns([3, 2], vertical_alignment="center")
     with c1:
         st.caption("Start from scratch with a fresh weekly template.")
@@ -169,6 +173,28 @@ def _render_desktop_download_cta() -> None:
             st.session_state["main_setup_yaml"] = blank_path.as_posix()
             st.session_state[_schedule_origin_mode_key(blank_path)] = "create_new"
             st.rerun()
+
+
+def _render_desktop_download_cta() -> None:
+    if _is_desktop_runtime():
+        return
+    meta = _desktop_download_meta()
+    if not meta.get("url"):
+        return
+    c1, c2 = st.columns([3, 2], vertical_alignment="center")
+    with c1:
+        extra = f" (v{meta['version']})" if meta.get("version") else ""
+        st.caption(
+            f"Install Schedule Builder locally on Windows{extra}. "
+            "You will review and accept the license agreement during installation."
+        )
+    with c2:
+        if hasattr(st, "link_button"):
+            st.link_button(meta["label"], meta["url"], use_container_width=True, type="primary")
+        else:
+            st.markdown(f"[{meta['label']}]({meta['url']})")
+    if meta.get("notes_url"):
+        st.caption(f"[Release notes]({meta['notes_url']})")
 
 
 def _available_base_schedule_files() -> list[str]:
@@ -5475,6 +5501,7 @@ def main() -> None:
     page = _render_top_nav()
 
     st.divider()
+    _render_blank_schedule_cta()
     _render_desktop_download_cta()
 
     cfg_path = Path(st.session_state["main_setup_yaml"])

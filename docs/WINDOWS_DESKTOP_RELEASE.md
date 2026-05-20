@@ -7,7 +7,7 @@ This project can be packaged as a Windows desktop installer (`ScheduleBuilderSet
 When `ScheduleBuilder.exe` starts:
 
 1. It looks for bundled `scheduler-ui/dist/index.html`.
-2. If found, it starts **FastAPI + the React Schedule Builder** on `http://127.0.0.1:8765` and opens that URL in your default browser.
+2. If found, it starts **FastAPI + the React Schedule Builder** on `http://127.0.0.1:8765` and opens a **native desktop window** (not a separate browser tab). A bundled intro video (`splash.mp4`) plays first, then the app loads in the same window.
 3. If the React bundle is missing, it falls back to the legacy **Streamlit** UI.
 
 The React desktop app includes:
@@ -20,6 +20,24 @@ The React desktop app includes:
 User data (saved schedules, imported catalog) is stored under the install folder, typically:
 
 `%LOCALAPPDATA%\ScheduleBuilder\`
+
+## Intro video (splash)
+
+Place your MP4 at `packaging/windows/assets/splash.mp4` (copied into `scheduler-ui/public/` during desktop builds). Replace that file to change the opening clip. Users can press **Esc** or click to skip.
+
+## Installer branding
+
+`scripts/build_app_icon.py` (run automatically in `build_desktop.ps1`) generates from `packaging/windows/ScheduleBuilder.png`:
+
+- `ScheduleBuilder.ico` — setup `.exe` icon and app icon
+- `WizardImageLarge.bmp` (164×314) — left banner on installer wizard pages
+- `WizardImageSmall.bmp` (55×58) — logo on inner wizard pages
+
+These are wired in `packaging/windows/ScheduleBuilder.iss` via `SetupIconFile`, `WizardImageFile`, and `WizardSmallImageFile`.
+
+## License agreement (installer)
+
+The installer shows `legal/EULA.txt` on the standard Inno Setup license page (`LicenseFile` in `ScheduleBuilder.iss`). Users must accept before installation continues. The running app does not show a separate legal dialog.
 
 ## One-time setup
 
@@ -76,6 +94,12 @@ The build script:
 - Startup logs: `%LOCALAPPDATA%\ScheduleBuilder\logs\startup-*.log`
 - If upload fails in desktop, rebuild with a recent `build_desktop.ps1` and reinstall.
 - `GET /api/health` should report `"content_import_wizard": true`.
+
+## App icon
+
+Source artwork: `packaging/windows/ScheduleBuilder.png` (square-cropped with black padding if not 1:1).
+
+Before each desktop build, `scripts/build_app_icon.py` writes `packaging/windows/ScheduleBuilder.ico` (16–256 px) for the `.exe` and installer, and copies favicons into `scheduler-ui/public/` for the browser tab (`favicon.ico`, `favicon-32.png`).
 
 ## Notes
 

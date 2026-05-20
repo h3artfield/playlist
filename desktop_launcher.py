@@ -1,7 +1,8 @@
 """Windows desktop launcher for Schedule Builder.
 
-Built with PyInstaller (one-folder mode). This entrypoint starts the bundled
-Streamlit app and opens the local UI in the default browser.
+Built with PyInstaller (one-folder mode). Starts the React UI on a local API
+and opens it in a native desktop window (splash video, then the app).
+Falls back to Streamlit or the default browser when the React bundle is missing.
 """
 
 from __future__ import annotations
@@ -11,7 +12,6 @@ import os
 import sys
 import threading
 import traceback
-import webbrowser
 from datetime import datetime
 from pathlib import Path
 
@@ -95,6 +95,39 @@ def _resolve_react_dist() -> Path | None:
     return None
 
 
+def _run_react_api_server() -> None:
+    import uvicorn
+
+    uvicorn.run("binge_schedule.api:app", host="127.0.0.1", port=8765, log_level="info")
+
+
+def _open_react_desktop_window(logf) -> int:
+    from binge_schedule.app_settings import load_settings
+    from binge_schedule.desktop_window import open_native_window, wait_for_api
+
+    base_url = "http://127.0.0.1:8765"
+    splash_url = f"{base_url}/splash.html"
+    window_mode = str(load_settings().get("desktop_window_mode") or "windowed")
+    server = threading.Thread(target=_run_react_api_server, daemon=True)
+    server.start()
+    logf.write("Started API server thread.\n")
+    if not wait_for_api(base_url):
+        raise RuntimeError("Schedule Builder API did not start on port 8765.")
+    logf.write("API health check passed.\n")
+    logf.write(f"Desktop window mode: {window_mode}\n")
+    try:
+        open_native_window(splash_url=splash_url, window_mode=window_mode)
+        logf.write("Desktop window closed.\n")
+        return 0
+    except RuntimeError as exc:
+        logf.write(f"Native window unavailable ({exc}); falling back to default browser.\n")
+        import webbrowser
+
+        threading.Timer(1.2, lambda: webbrowser.open(splash_url)).start()
+        _run_react_api_server()
+        return 0
+
+
 def _desktop_working_directory(react_dist: Path | None) -> Path:
     """Use the install/exe folder so bundled config/ and writable config/ resolve correctly."""
     exe_dir = Path(sys.executable).resolve().parent
@@ -111,8 +144,6 @@ def main() -> int:
         try:
             react_dist = _resolve_react_dist()
             if react_dist is not None:
-                import uvicorn
-
                 root = _desktop_working_directory(react_dist)
                 os.chdir(root)
                 logf.write(f"Resolved React UI path: {react_dist}\n")
@@ -124,11 +155,8 @@ def main() -> int:
                 )
                 if demo_schedule.is_file():
                     os.environ.setdefault("SCHEDULE_BUILDER_DEFAULT_CONFIG", "config/blank_schedule.yaml")
-                url = "http://127.0.0.1:8765"
-                threading.Timer(1.2, lambda: webbrowser.open(url)).start()
                 with contextlib.redirect_stdout(logf), contextlib.redirect_stderr(logf):
-                    uvicorn.run("binge_schedule.api:app", host="127.0.0.1", port=8765, log_level="info")
-                return 0
+                    return _open_react_desktop_window(logf)
 
             app_path = _resolve_app_script()
             logf.write(f"Resolved app path: {app_path}\n")

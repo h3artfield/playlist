@@ -2,6 +2,12 @@
 
 Use this when you want people to click a button in the Streamlit app and download your Windows installer.
 
+## Legal acceptance (installer only)
+
+The End User License Agreement is shown during **Windows installation** only (`legal/EULA.txt`, wired via `LicenseFile` in `packaging/windows/ScheduleBuilder.iss`). Users must click **I accept** on the installer license page before setup continues. The installed app does not show a separate legal prompt.
+
+**Have qualified legal counsel review `legal/EULA.txt` before production use.**
+
 ## How it works
 
 The app includes a **Download Desktop App (Windows)** button and links to GitHub Releases by default:
