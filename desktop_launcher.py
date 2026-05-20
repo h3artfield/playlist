@@ -29,6 +29,27 @@ def _is_packaged() -> bool:
     return getattr(sys, "frozen", False)
 
 
+def _acquire_single_instance() -> bool:
+    """Return False if another Schedule Builder process already holds the mutex."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        mutex = kernel32.CreateMutexW(None, False, "Local\\ScheduleBuilder.SingleInstance")
+        already_running = kernel32.GetLastError() == 183
+        if already_running:
+            _show_error_dialog(
+                "Schedule Builder",
+                "Schedule Builder is already running.\n\nClose the other window first, then try again.",
+            )
+            return False
+    except Exception:
+        return True
+    return True
+
+
 def _show_error_dialog(title: str, message: str) -> None:
     try:
         import tkinter as tk
@@ -81,17 +102,23 @@ def _ensure_api_running(logf) -> str:
         return base_url
 
     if port_is_listening(API_HOST, API_PORT):
-        logf.write("Port 8765 is in use; attempting to stop prior Schedule Builder / dev API...\n")
-        if free_port_on_windows(API_PORT):
+        from binge_schedule.desktop_window import _listeners_on_port
+
+        pids = _listeners_on_port(API_PORT)
+        logf.write(f"Port 8765 is in use (listener PIDs: {pids or 'unknown'}).\n")
+        logf.write("Attempting to stop prior Schedule Builder / dev API...\n")
+        aggressive = os.environ.get("SCHEDULE_BUILDER_DESKTOP_RUNTIME") == "1"
+        if free_port_on_windows(API_PORT, aggressive=aggressive):
             logf.write("Freed port 8765.\n")
         elif api_health_ok(base_url):
-            logf.write("Port in use but health check passed; continuing.\n")
+            logf.write("Port in use but Schedule Builder API health check passed; reusing it.\n")
             return base_url
         else:
             raise RuntimeError(
-                "Port 8765 is already in use. Close any other Schedule Builder window, "
-                "stop the dev API (scripts/start-dev-api.ps1), or end the Python process "
-                "using that port, then try again."
+                "Port 8765 is still in use. Close any Schedule Builder window, stop the dev API "
+                "(scripts/start-dev-api.ps1), or run: "
+                "Get-NetTCPConnection -LocalPort 8765 -State Listen | "
+                "ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }"
             )
 
     server = threading.Thread(target=_run_react_api_server, daemon=True)
@@ -156,6 +183,9 @@ def _run_streamlit_dev_fallback(logf) -> int:
 
 
 def main() -> int:
+    if not _acquire_single_instance():
+        return 0
+
     log_path = _logs_dir() / f"startup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
     with log_path.open("w", encoding="utf-8") as logf:
         try:

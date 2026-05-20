@@ -15,7 +15,10 @@ def api_health_ok(base_url: str, *, timeout: float = 0.75) -> bool:
     health_url = f"{base_url.rstrip('/')}/api/health"
     try:
         with urllib.request.urlopen(health_url, timeout=timeout) as response:
-            return response.status == 200
+            if response.status != 200:
+                return False
+            body = response.read(200).decode("utf-8", errors="ignore")
+            return "schedule" in body.lower() or "ok" in body.lower() or "status" in body.lower()
     except (urllib.error.URLError, TimeoutError, OSError):
         return False
 
@@ -26,44 +29,78 @@ def port_is_listening(host: str, port: int) -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
-def free_port_on_windows(port: int) -> bool:
-    """Stop processes listening on port (Schedule Builder / Python dev API only)."""
+def _listeners_on_port(port: int) -> list[int]:
     if sys.platform != "win32":
-        return False
+        return []
     script = (
         f"$c = Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue; "
         "if (-not $c) { exit 0 }; "
-        "$pids = $c.OwningProcess | Select-Object -Unique; "
-        "foreach ($pid in $pids) { "
-        "$p = Get-Process -Id $pid -ErrorAction SilentlyContinue; "
-        "if (-not $p) { continue }; "
-        "$name = $p.ProcessName.ToLower(); "
-        "if ($name -in @('schedulebuilder','python','pythonw')) { "
-        "Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue } }; "
-        "Start-Sleep -Milliseconds 400"
+        "$c.OwningProcess | Select-Object -Unique | ForEach-Object { Write-Output $_ }"
     )
     try:
-        subprocess.run(
+        proc = subprocess.run(
             ["powershell", "-NoProfile", "-Command", script],
             capture_output=True,
+            text=True,
             timeout=8,
             check=False,
         )
     except Exception:
+        return []
+    pids: list[int] = []
+    for line in (proc.stdout or "").splitlines():
+        text = line.strip()
+        if text.isdigit():
+            pids.append(int(text))
+    return pids
+
+
+def free_port_on_windows(port: int, *, aggressive: bool = False) -> bool:
+    """Stop processes listening on port. Uses $procId — never $pid (reserved in PowerShell)."""
+    if sys.platform != "win32":
         return False
+
+    for attempt in range(4):
+        pids = _listeners_on_port(port)
+        if not pids:
+            return True
+
+        for proc_id in pids:
+            if aggressive:
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(proc_id)],
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                )
+                continue
+            script = (
+                f"$p = Get-Process -Id {proc_id} -ErrorAction SilentlyContinue; "
+                "if (-not $p) { exit 0 }; "
+                "$name = $p.ProcessName.ToLower(); "
+                "if ($name -in @('schedulebuilder','python','pythonw','pyinstaller')) { "
+                f"Stop-Process -Id {proc_id} -Force -ErrorAction SilentlyContinue }}"
+            )
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command", script],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+
+        time.sleep(0.35 * (attempt + 1))
+        if not port_is_listening("127.0.0.1", port):
+            return True
+
     return not port_is_listening("127.0.0.1", port)
 
 
 def wait_for_api(base_url: str, *, timeout_seconds: float = 30.0) -> bool:
     deadline = time.monotonic() + timeout_seconds
-    health_url = f"{base_url.rstrip('/')}/api/health"
     while time.monotonic() < deadline:
-        try:
-            with urllib.request.urlopen(health_url, timeout=0.75) as response:
-                if response.status == 200:
-                    return True
-        except (urllib.error.URLError, TimeoutError, OSError):
-            time.sleep(0.15)
+        if api_health_ok(base_url):
+            return True
+        time.sleep(0.15)
     return False
 
 

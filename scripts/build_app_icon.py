@@ -16,6 +16,7 @@ WEB_FAVICON_SIZES = (32, 180)
 INSTALLER_LARGE_SIZE = (164, 314)
 INSTALLER_SMALL_SIZE = (55, 58)
 BRAND_BG_RGBA = (15, 23, 42, 255)
+INSTALLER_SMALL_BG_RGBA = (255, 255, 255, 255)
 
 
 def _square_canvas(img, image_module) -> tuple:
@@ -32,7 +33,8 @@ def _write_installer_wizard_images(canvas, image_module) -> None:
     logo_large = canvas.resize((132, 132), image_module.Resampling.LANCZOS)
     large.paste(logo_large, ((INSTALLER_LARGE_SIZE[0] - 132) // 2, 72), logo_large)
 
-    small = image_module.new("RGBA", INSTALLER_SMALL_SIZE, BRAND_BG_RGBA)
+    # Top-right installer logo sits on a white wizard page — use a white backdrop, not dark brand fill.
+    small = image_module.new("RGBA", INSTALLER_SMALL_SIZE, INSTALLER_SMALL_BG_RGBA)
     logo_small = canvas.resize((46, 46), image_module.Resampling.LANCZOS)
     small.paste(
         logo_small,
@@ -40,11 +42,15 @@ def _write_installer_wizard_images(canvas, image_module) -> None:
         logo_small,
     )
 
-    for surface, path in ((large, INSTALLER_LARGE_BMP), (small, INSTALLER_SMALL_BMP)):
-        flat = image_module.new("RGB", surface.size, BRAND_BG_RGBA[:3])
-        flat.paste(surface, mask=surface.split()[3])
-        flat.save(path, format="BMP")
-        print(f"Wrote {path}")
+    large_flat = image_module.new("RGB", large.size, BRAND_BG_RGBA[:3])
+    large_flat.paste(large, mask=large.split()[3])
+    large_flat.save(INSTALLER_LARGE_BMP, format="BMP")
+    print(f"Wrote {INSTALLER_LARGE_BMP}")
+
+    small_flat = image_module.new("RGB", small.size, INSTALLER_SMALL_BG_RGBA[:3])
+    small_flat.paste(small, mask=small.split()[3])
+    small_flat.save(INSTALLER_SMALL_BMP, format="BMP")
+    print(f"Wrote {INSTALLER_SMALL_BMP}")
 
 
 def main() -> None:
