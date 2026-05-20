@@ -95,24 +95,62 @@ def _resolve_react_dist() -> Path | None:
     return None
 
 
+API_HOST = "127.0.0.1"
+API_PORT = 8765
+
+
 def _run_react_api_server() -> None:
     import uvicorn
 
-    uvicorn.run("binge_schedule.api:app", host="127.0.0.1", port=8765, log_level="info")
+    uvicorn.run("binge_schedule.api:app", host=API_HOST, port=API_PORT, log_level="info")
 
 
-def _open_react_desktop_window(logf) -> int:
-    from binge_schedule.app_settings import load_settings
-    from binge_schedule.desktop_window import open_native_window, wait_for_api
+def _ensure_api_running(logf) -> str:
+    from binge_schedule.desktop_window import (
+        api_health_ok,
+        free_port_on_windows,
+        port_is_listening,
+        wait_for_api,
+    )
 
-    base_url = "http://127.0.0.1:8765"
-    splash_url = f"{base_url}/splash.html"
-    window_mode = str(load_settings().get("desktop_window_mode") or "windowed")
+    base_url = f"http://{API_HOST}:{API_PORT}"
+
+    if api_health_ok(base_url):
+        logf.write("Reusing API already listening on port 8765.\n")
+        return base_url
+
+    if port_is_listening(API_HOST, API_PORT):
+        logf.write("Port 8765 is in use; attempting to stop prior Schedule Builder / dev API...\n")
+        if free_port_on_windows(API_PORT):
+            logf.write("Freed port 8765.\n")
+        elif api_health_ok(base_url):
+            logf.write("Port in use but health check passed; continuing.\n")
+            return base_url
+        else:
+            raise RuntimeError(
+                "Port 8765 is already in use. Close any other Schedule Builder window, "
+                "stop the dev API (scripts/start-dev-api.ps1), or end the Python process "
+                "using that port, then try again."
+            )
+
     server = threading.Thread(target=_run_react_api_server, daemon=True)
     server.start()
     logf.write("Started API server thread.\n")
     if not wait_for_api(base_url):
-        raise RuntimeError("Schedule Builder API did not start on port 8765.")
+        raise RuntimeError(
+            "Schedule Builder API did not start on port 8765. "
+            "See the log file in %LOCALAPPDATA%\\ScheduleBuilder\\logs\\"
+        )
+    return base_url
+
+
+def _open_react_desktop_window(logf) -> int:
+    from binge_schedule.app_settings import load_settings
+    from binge_schedule.desktop_window import open_native_window
+
+    base_url = _ensure_api_running(logf)
+    splash_url = f"{base_url}/splash.html"
+    window_mode = str(load_settings().get("desktop_window_mode") or "windowed")
     logf.write("API health check passed.\n")
     logf.write(f"Desktop window mode: {window_mode}\n")
     try:
