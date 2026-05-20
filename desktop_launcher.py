@@ -94,14 +94,14 @@ def _ensure_api_running(logf) -> str:
     base_url = f"http://{API_HOST}:{port}"
     logf.write(f"API port: {port}\n")
 
-    if wait_for_api(base_url, timeout_seconds=1.5):
+    if wait_for_api(base_url, timeout_seconds=2.0):
         logf.write(f"Reusing API already listening on port {port}.\n")
         return base_url
 
     server = threading.Thread(target=_run_react_api_server, args=(port,), daemon=True)
     server.start()
     logf.write(f"Started API server thread on port {port}.\n")
-    if not wait_for_api(base_url):
+    if not wait_for_api(base_url, timeout_seconds=90.0):
         raise RuntimeError(
             f"Schedule Builder API did not start on port {port}. "
             "See the log file in %LOCALAPPDATA%\\ScheduleBuilder\\logs\\"

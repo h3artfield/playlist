@@ -147,8 +147,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
-        from binge_schedule.app_settings import load_settings, primary_saved_schedules_root
-        from binge_schedule.legal import legal_status
+        from binge_schedule.app_settings import primary_saved_schedules_root
         from binge_schedule.runtime_paths import content_import_wizard_available, is_desktop_runtime
 
         return {
@@ -162,7 +161,6 @@ def create_app() -> FastAPI:
                 "export_to_downloads": True,
             },
             "primary_save_directory": primary_saved_schedules_root().as_posix(),
-            "legal": legal_status(load_settings()),
         }
 
     @app.get("/api/desktop-download")
