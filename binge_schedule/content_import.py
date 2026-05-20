@@ -1,0 +1,354 @@
+from __future__ import annotations
+
+import json
+import re
+from io import BytesIO
+from pathlib import Path
+from typing import Any, Optional
+
+import pandas as pd
+
+from binge_schedule.config_io import BuildConfig
+from binge_schedule.content_catalog import canonical_rows_from_config, write_canonical_catalog
+
+IMPORT_ALIASES: dict[str, set[str]] = {
+    "series_title": {
+        "series title",
+        "series name",
+        "series",
+        "show",
+        "show title",
+        "program",
+        "program title",
+    },
+    "title": {
+        "title",
+        "episode",
+        "episode title",
+        "movie title",
+        "asset title",
+    },
+    "episode_number": {
+        "episode number",
+        "season/episode",
+        "ep #",
+        "episode #",
+    },
+    "runtime": {"runtime", "duration", "length", "run time", "run time (min)"},
+    "content_type": {"content type", "type", "category"},
+    "genre": {"genre", "category"},
+    "original_airdate": {"original airdate", "airdate", "year", "release date"},
+    "synopsis_short": {"synopsis short", "short synopsis", "short description"},
+    "synopsis_long": {"synopsis long", "long synopsis", "description"},
+    "copyright": {"copyright", "rights"},
+}
+
+
+def imported_catalog_path(cfg: BuildConfig) -> Path:
+    from binge_schedule.runtime_paths import imported_catalog_path as resolve_imported_catalog_path
+
+    cfg_file = cfg.config_path.resolve() if cfg.config_path is not None else None
+    return resolve_imported_catalog_path(cfg_file)
+
+
+def _normalize_key(text: Any) -> str:
+    value = " ".join(str(text or "").strip().lower().split())
+    return "" if value in {"nan", "none", "null", "nat"} else value
+
+
+def _clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    text = str(value).strip()
+    return "" if text.lower() == "nan" else text
+
+
+def _normalize_episode_number(value: Any) -> str:
+    raw = _normalize_key(value)
+    if not raw:
+        return ""
+    if re.fullmatch(r"\d+", raw):
+        return str(int(raw))
+    return raw
+
+
+def import_row_identity_key(row: dict[str, Any]) -> str:
+    kind = _normalize_key(row.get("content_type", ""))
+    series_title = _normalize_key(row.get("series_title", ""))
+    display_name = _normalize_key(row.get("display_name", ""))
+    ep_num = _normalize_episode_number(row.get("episode_number", ""))
+    ep_title = _normalize_key(row.get("episode_title", ""))
+    if kind == "series":
+        base = series_title or display_name
+        episode_token = ep_num or ep_title
+        return f"{kind}|{base}|{episode_token}"
+    return f"{kind or 'movie'}|{display_name or series_title}"
+
+
+def dedupe_import_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        key = import_row_identity_key(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
+def load_imported_catalog_rows(cfg: BuildConfig) -> list[dict[str, Any]]:
+    path = imported_catalog_path(cfg)
+    if not path.is_file():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    if isinstance(raw, dict):
+        rows = raw.get("rows", [])
+        if isinstance(rows, list):
+            return dedupe_import_rows([row for row in rows if isinstance(row, dict)])
+    if isinstance(raw, list):
+        return dedupe_import_rows([row for row in raw if isinstance(row, dict)])
+    return []
+
+
+def save_imported_catalog_rows(cfg: BuildConfig, rows: list[dict[str, Any]]) -> Path:
+    path = imported_catalog_path(cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"rows": dedupe_import_rows(rows)}
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
+def merge_import_rows(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = dedupe_import_rows(list(existing))
+    seen_idx: dict[str, int] = {}
+    for index, row in enumerate(out):
+        seen_idx[import_row_identity_key(row)] = index
+    for row in incoming:
+        key = import_row_identity_key(row)
+        if key in seen_idx:
+            out[seen_idx[key]] = row
+        else:
+            seen_idx[key] = len(out)
+            out.append(row)
+    return dedupe_import_rows(out)
+
+
+def _runtime_minutes_from_cell(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if isinstance(value, (int, float)):
+        fv = float(value)
+        if 0 < fv < 1:
+            return max(1, int(round(fv * 24 * 60)))
+        return max(1, int(round(fv)))
+    if hasattr(value, "total_seconds"):
+        try:
+            return max(1, int(round(float(value.total_seconds()) / 60.0)))
+        except Exception:
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if ":" in text:
+        parts = text.split(":")
+        try:
+            nums = [int(float(part)) for part in parts]
+        except ValueError:
+            return None
+        if len(nums) == 3:
+            return max(1, nums[0] * 60 + nums[1])
+        if len(nums) == 2:
+            return max(1, nums[0])
+    try:
+        return max(1, int(round(float(text))))
+    except ValueError:
+        return None
+
+
+def _column_map(df: pd.DataFrame) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for column in df.columns:
+        normalized = _normalize_key(column)
+        for canon, aliases in IMPORT_ALIASES.items():
+            if normalized in aliases and canon not in mapping:
+                mapping[canon] = str(column)
+    return mapping
+
+
+def rows_from_dataframe(df: pd.DataFrame, *, sheet_name: str, source_name: str) -> list[dict[str, Any]]:
+    col_map = _column_map(df)
+    out: list[dict[str, Any]] = []
+    for _, record in df.iterrows():
+        series_title = _clean_text(record.get(col_map.get("series_title", ""), ""))
+        title = _clean_text(record.get(col_map.get("title", ""), ""))
+        ep_num = _clean_text(record.get(col_map.get("episode_number", ""), ""))
+        raw_type = _clean_text(record.get(col_map.get("content_type", ""), "")).lower()
+        if raw_type in {"movie", "movies", "special", "specials", "film", "feature"}:
+            is_series = False
+        elif raw_type in {"series", "show", "episode"}:
+            is_series = True
+        else:
+            is_series = bool(series_title and (ep_num or title))
+        if is_series and not series_title:
+            series_title = sheet_name.strip()
+        display = series_title if is_series else title
+        if not display:
+            continue
+        runtime = _runtime_minutes_from_cell(record.get(col_map.get("runtime", ""), None))
+        air_raw = record.get(col_map.get("original_airdate", ""), None)
+        air_iso = ""
+        try:
+            if pd.notna(air_raw):
+                air_iso = pd.to_datetime(air_raw).date().isoformat()
+        except Exception:
+            air_iso = _clean_text(air_raw)
+        out.append(
+            {
+                "content_type": "series" if is_series else "movie",
+                "display_name": display,
+                "series_title": series_title if is_series else "",
+                "episode_number": ep_num if is_series else "",
+                "episode_title": title if is_series else "",
+                "genre": _clean_text(record.get(col_map.get("genre", ""), "")).split(",")[0].strip().lower(),
+                "runtime_minutes": runtime,
+                "original_airdate": air_iso,
+                "copyright": _clean_text(record.get(col_map.get("copyright", ""), "")),
+                "synopsis_short": _clean_text(record.get(col_map.get("synopsis_short", ""), "")),
+                "synopsis_long": _clean_text(record.get(col_map.get("synopsis_long", ""), "")),
+                "source_sheet": sheet_name,
+                "source_file": source_name,
+            }
+        )
+    return out
+
+
+def parse_upload_file(filename: str, payload: bytes) -> list[dict[str, Any]]:
+    name = str(filename or "").strip()
+    lower = name.lower()
+    rows: list[dict[str, Any]] = []
+    if lower.endswith(".csv"):
+        df = pd.read_csv(BytesIO(payload))
+        rows.extend(rows_from_dataframe(df, sheet_name="CSV", source_name=name))
+        return rows
+    if lower.endswith((".xlsx", ".xls")):
+        workbook = pd.ExcelFile(BytesIO(payload))
+        for sheet_name in workbook.sheet_names:
+            df = pd.read_excel(BytesIO(payload), sheet_name=sheet_name)
+            rows.extend(rows_from_dataframe(df, sheet_name=sheet_name, source_name=name))
+        return rows
+    raise ValueError("Upload a CSV or Excel (.xlsx) file.")
+
+
+def build_manual_row(
+    *,
+    content_type: str,
+    show_name: str,
+    episode_number: str = "",
+    episode_title: str = "",
+    runtime_minutes: Optional[int] = None,
+    genre: str = "",
+) -> dict[str, Any]:
+    show = _clean_text(show_name)
+    if not show:
+        raise ValueError("Show or title is required.")
+    normalized_type = _normalize_key(content_type)
+    is_series = normalized_type in {"series", "show", "episode"}
+    ep_num = _clean_text(episode_number)
+    ep_title = _clean_text(episode_title)
+    if is_series and not ep_num and not ep_title:
+        raise ValueError("Series rows need an episode number or episode title.")
+    return {
+        "content_type": "series" if is_series else normalized_type or "movie",
+        "display_name": show,
+        "series_title": show if is_series else "",
+        "episode_number": ep_num if is_series else "",
+        "episode_title": ep_title if is_series else "",
+        "genre": _clean_text(genre).lower(),
+        "runtime_minutes": runtime_minutes,
+        "source_sheet": "manual",
+        "source_file": "schedule_builder",
+    }
+
+
+def catalog_publish_paths() -> list[Path]:
+    from binge_schedule.runtime_paths import catalog_publish_targets
+
+    return catalog_publish_targets()
+
+
+def publish_content_catalog(cfg: BuildConfig) -> tuple[list[dict[str, Any]], list[Path]]:
+    rows = canonical_rows_from_config(cfg)
+    written: list[Path] = []
+    for path in catalog_publish_paths():
+        write_canonical_catalog(rows, path)
+        written.append(path)
+    return rows, written
+
+
+def _show_match_key(name: str) -> str:
+    return _normalize_key(name)
+
+
+def replace_show_catalog_rows(cfg: BuildConfig, display_name: str, incoming: list[dict[str, Any]]) -> dict[str, Any]:
+    """Replace all imported catalog rows for one show (spreadsheet save)."""
+    show_key = _show_match_key(display_name)
+    if not show_key:
+        raise ValueError("Show name is required.")
+    existing = load_imported_catalog_rows(cfg)
+    kept = [
+        row
+        for row in existing
+        if _show_match_key(str(row.get("display_name", ""))) != show_key
+        and _show_match_key(str(row.get("series_title", ""))) != show_key
+    ]
+    normalized: list[dict[str, Any]] = []
+    for row in incoming:
+        if not isinstance(row, dict):
+            continue
+        copy = dict(row)
+        copy["display_name"] = display_name
+        if _normalize_key(copy.get("content_type", "")) != "movie":
+            copy["series_title"] = display_name
+        normalized.append(copy)
+    if not normalized:
+        raise ValueError("At least one episode row is required.")
+    merged = dedupe_import_rows(kept + normalized)
+    save_imported_catalog_rows(cfg, merged)
+    catalog_rows, written_paths = publish_content_catalog(cfg)
+    return {
+        "display_name": display_name,
+        "saved_row_count": len(normalized),
+        "catalog_row_count": len(catalog_rows),
+        "catalog_paths": [path.as_posix() for path in written_paths],
+    }
+
+
+def import_content_rows(cfg: BuildConfig, incoming: list[dict[str, Any]]) -> dict[str, Any]:
+    if not incoming:
+        raise ValueError("No content rows to import.")
+    existing = load_imported_catalog_rows(cfg)
+    before = len(existing)
+    merged = merge_import_rows(existing, incoming)
+    save_imported_catalog_rows(cfg, merged)
+    catalog_rows, written_paths = publish_content_catalog(cfg)
+    return {
+        "imported_count": len(merged) - before,
+        "updated_count": max(0, len(incoming) - max(0, len(merged) - before)),
+        "total_imported_rows": len(merged),
+        "catalog_row_count": len(catalog_rows),
+        "catalog_paths": [path.as_posix() for path in written_paths],
+    }

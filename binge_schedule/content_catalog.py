@@ -677,6 +677,8 @@ def _unconfigured_archive_rows(
 
 def canonical_rows_from_config(cfg: BuildConfig, *, station_id: Optional[str] = None) -> list[dict[str, Any]]:
     """Normalize YAML/Nikki content rules into the shared content table."""
+    from binge_schedule.content_import import load_imported_catalog_rows
+
     sid = station_id or (cfg.config_path.stem if cfg.config_path else "default")
     workbook_path = resolved_nikki_workbook_path(cfg)
     rows: list[dict[str, Any]] = []
@@ -684,6 +686,25 @@ def canonical_rows_from_config(cfg: BuildConfig, *, station_id: Optional[str] = 
         rows.extend(_rows_from_show(cfg, cfg.shows[key], station_id=sid, workbook_path=workbook_path))
     rows.extend(_unconfigured_archive_rows(cfg, station_id=sid, workbook_path=workbook_path))
     rows.extend(_movie_rows_from_workbook(cfg, station_id=sid, workbook_path=workbook_path))
+    imported = load_imported_catalog_rows(cfg)
+    if imported:
+        overridden = {
+            _clean_text(row.get("display_name")).casefold()
+            for row in imported
+            if _clean_text(row.get("display_name"))
+        }
+        overridden.update(
+            _clean_text(row.get("series_title")).casefold()
+            for row in imported
+            if _clean_text(row.get("series_title"))
+        )
+        if overridden:
+            rows = [
+                row
+                for row in rows
+                if _clean_text(row.get("display_name")).casefold() not in overridden
+            ]
+        rows.extend(canonical_rows_from_imported_rows(imported, station_id=sid))
     return rows
 
 

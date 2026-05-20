@@ -14,3 +14,6 @@ packaging/windows/Output/
 ~$*.xlsx
 .streamlit/secrets.toml
 config/episode_cursors.json
+config/imported_content_catalog.json
+saved_schedules/
+data/imported/

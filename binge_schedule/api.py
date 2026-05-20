@@ -11,7 +11,7 @@ import threading
 from typing import Any, Optional
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -67,11 +67,61 @@ class AutoGeneratePayload(BaseModel):
     week_count: int = 1
 
 
+class ImportContentRowPayload(BaseModel):
+    content_type: str = "series"
+    show_name: str = ""
+    episode_number: str = ""
+    episode_title: str = ""
+    runtime_minutes: Optional[int] = None
+    genre: str = ""
+
+
+class ImportContentRowsPayload(BaseModel):
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class UpdateShowRowsPayload(BaseModel):
+    display_name: str
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ImportPreviewSheetConfig(BaseModel):
+    sheet_name: str
+    include: bool = True
+    header_row: int = Field(default=1, ge=1, le=50)
+    row_kind: str = "auto"
+    default_series_title: str = ""
+    mapping: dict[str, str] = Field(default_factory=dict)
+
+
+class ImportPreviewPayload(BaseModel):
+    session_id: str
+    sheets: list[ImportPreviewSheetConfig] = Field(default_factory=list)
+
+
+class ImportCommitPayload(BaseModel):
+    session_id: str
+    sheets: list[ImportPreviewSheetConfig] = Field(default_factory=list)
+
+
+class ImportSheetAnalyzePayload(BaseModel):
+    session_id: str
+    sheet_name: str
+    header_row: int = Field(default=1, ge=1, le=50)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Playlist Schedule Builder API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+        allow_origins=[
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+            "http://127.0.0.1:4173",
+            "http://localhost:4173",
+            "http://127.0.0.1:8765",
+            "http://localhost:8765",
+        ],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -79,11 +129,15 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
+        from binge_schedule.runtime_paths import content_import_wizard_available, is_desktop_runtime
+
         return {
             "status": "ok",
             "features": {
                 "auto_generate_weeks": True,
                 "auto_generate_date_shift": True,
+                "content_import_wizard": content_import_wizard_available(),
+                "desktop_runtime": is_desktop_runtime(),
             },
         }
 
@@ -109,6 +163,131 @@ def create_app() -> FastAPI:
             "row_count": len(rows),
             "rows": rows,
         }
+
+    @app.post("/api/content/import")
+    def import_content_row(payload: ImportContentRowPayload, config: str = str(DEFAULT_CONFIG)) -> dict[str, Any]:
+        from binge_schedule.content_import import build_manual_row, import_content_rows
+
+        cfg_path = _safe_config_path(config)
+        cfg = load_build_config(cfg_path)
+        try:
+            row = build_manual_row(
+                content_type=payload.content_type,
+                show_name=payload.show_name,
+                episode_number=payload.episode_number,
+                episode_title=payload.episode_title,
+                runtime_minutes=payload.runtime_minutes,
+                genre=payload.genre,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return import_content_rows(cfg, [row])
+
+    @app.post("/api/content/import/batch")
+    def import_content_batch(payload: ImportContentRowsPayload, config: str = str(DEFAULT_CONFIG)) -> dict[str, Any]:
+        from binge_schedule.content_import import import_content_rows
+
+        cfg_path = _safe_config_path(config)
+        cfg = load_build_config(cfg_path)
+        if not payload.rows:
+            raise HTTPException(status_code=400, detail="No content rows provided")
+        return import_content_rows(cfg, payload.rows)
+
+    @app.put("/api/content/show-rows")
+    def update_show_rows(payload: UpdateShowRowsPayload, config: str = str(DEFAULT_CONFIG)) -> dict[str, Any]:
+        from binge_schedule.content_import import replace_show_catalog_rows
+
+        cfg_path = _safe_config_path(config)
+        cfg = load_build_config(cfg_path)
+        if not payload.display_name.strip():
+            raise HTTPException(status_code=400, detail="display_name is required")
+        try:
+            return replace_show_catalog_rows(cfg, payload.display_name.strip(), payload.rows)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/content/import/upload")
+    async def import_content_upload(
+        file: UploadFile = File(...),
+        config: str = str(DEFAULT_CONFIG),
+    ) -> dict[str, Any]:
+        from binge_schedule.content_import import import_content_rows, parse_upload_file
+
+        cfg_path = _safe_config_path(config)
+        cfg = load_build_config(cfg_path)
+        payload = await file.read()
+        if not payload:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+        try:
+            rows = parse_upload_file(file.filename or "upload.csv", payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not parse upload: {exc}") from exc
+        if not rows:
+            raise HTTPException(status_code=400, detail="No content rows found in the uploaded file")
+        return import_content_rows(cfg, rows)
+
+    @app.post("/api/content/import/parse")
+    async def import_content_parse(file: UploadFile = File(...)) -> dict[str, Any]:
+        from binge_schedule.content_import_wizard import create_import_session, parse_session_response
+
+        payload = await file.read()
+        if not payload:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+        try:
+            session_id = create_import_session(file.filename or "upload.csv", payload)
+            return parse_session_response(session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not parse upload: {exc}") from exc
+
+    @app.post("/api/content/import/sheet")
+    def import_content_sheet(payload: ImportSheetAnalyzePayload) -> dict[str, Any]:
+        from binge_schedule.content_import_wizard import analyze_sheet_in_session
+
+        try:
+            return analyze_sheet_in_session(payload.session_id, payload.sheet_name, payload.header_row)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not analyze sheet: {exc}") from exc
+
+    @app.post("/api/content/import/preview")
+    def import_content_preview(
+        payload: ImportPreviewPayload,
+        config: str = str(DEFAULT_CONFIG),
+    ) -> dict[str, Any]:
+        from binge_schedule.content_import_wizard import preview_import
+
+        if not payload.session_id:
+            raise HTTPException(status_code=400, detail="session_id is required")
+        try:
+            cfg_path = _safe_config_path(config)
+            cfg = load_build_config(cfg_path)
+            sheet_payloads = [sheet.model_dump() for sheet in payload.sheets]
+            return preview_import(payload.session_id, sheet_payloads, cfg=cfg)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Preview failed: {exc}") from exc
+
+    @app.post("/api/content/import/commit")
+    def import_content_commit(payload: ImportCommitPayload, config: str = str(DEFAULT_CONFIG)) -> dict[str, Any]:
+        from binge_schedule.content_import_wizard import commit_import
+
+        cfg_path = _safe_config_path(config)
+        cfg = load_build_config(cfg_path)
+        if not payload.session_id:
+            raise HTTPException(status_code=400, detail="session_id is required")
+        try:
+            sheet_payloads = [sheet.model_dump() for sheet in payload.sheets]
+            return commit_import(cfg, payload.session_id, sheet_payloads)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Import failed: {exc}") from exc
 
     @app.get("/api/base-schedules")
     def base_schedules() -> dict[str, Any]:
@@ -270,67 +449,27 @@ def _static_catalog_payload() -> dict[str, Any] | None:
 
 
 def _static_catalog_path() -> Path | None:
-    candidates: list[Path] = []
-    ui_dist = _ui_dist_path()
-    if ui_dist is not None:
-        candidates.append(ui_dist / "content-catalog.json")
+    from binge_schedule.runtime_paths import catalog_publish_targets
 
-    module_root = Path(__file__).resolve().parents[1]
-    exe_dir = Path(sys.executable).resolve().parent
-    meipass = Path(getattr(sys, "_MEIPASS", "")) if getattr(sys, "_MEIPASS", None) else None
-    candidates.extend(
-        [
-            Path.cwd() / "scheduler-ui" / "public" / "content-catalog.json",
-            Path.cwd() / "scheduler-ui" / "dist" / "content-catalog.json",
-            module_root / "scheduler-ui" / "public" / "content-catalog.json",
-            module_root / "scheduler-ui" / "dist" / "content-catalog.json",
-            exe_dir / "scheduler-ui" / "dist" / "content-catalog.json",
-            exe_dir / "_internal" / "scheduler-ui" / "dist" / "content-catalog.json",
-        ]
-    )
-    if meipass is not None:
-        candidates.append(meipass / "scheduler-ui" / "dist" / "content-catalog.json")
-
-    for candidate in candidates:
+    for candidate in catalog_publish_targets():
         if candidate.is_file():
             return candidate
     return None
 
 
 def _ui_dist_path() -> Path | None:
-    env_path = os.environ.get("SCHEDULE_BUILDER_REACT_DIST", "").strip()
-    candidates: list[Path] = []
-    if env_path:
-        candidates.append(Path(env_path))
+    from binge_schedule.runtime_paths import react_dist_path
 
-    module_root = Path(__file__).resolve().parents[1]
-    exe_dir = Path(sys.executable).resolve().parent
-    meipass = Path(getattr(sys, "_MEIPASS", "")) if getattr(sys, "_MEIPASS", None) else None
-    candidates.extend(
-        [
-            Path.cwd() / "scheduler-ui" / "dist",
-            module_root / "scheduler-ui" / "dist",
-            exe_dir / "scheduler-ui" / "dist",
-            exe_dir / "_internal" / "scheduler-ui" / "dist",
-        ]
-    )
-    if meipass is not None:
-        candidates.append(meipass / "scheduler-ui" / "dist")
-
-    for candidate in candidates:
-        if (candidate / "index.html").is_file():
-            return candidate
-    return None
+    return react_dist_path()
 
 
 def _safe_config_path(raw: str) -> Path:
-    path = Path(raw or str(DEFAULT_CONFIG))
-    if path.is_absolute():
-        p = path
-    else:
-        p = (Path.cwd() / path).resolve()
-    if not p.is_file():
-        raise HTTPException(status_code=404, detail=f"Config not found: {raw}")
+    from binge_schedule.runtime_paths import resolve_config_path
+
+    try:
+        p = resolve_config_path(raw or str(DEFAULT_CONFIG))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Config not found: {raw}") from exc
     if p.suffix.lower() not in {".yaml", ".yml"}:
         raise HTTPException(status_code=400, detail="Config path must be a YAML file")
     return p
@@ -871,9 +1010,9 @@ def _episode_position(block: dict[str, Any], episodes: list[dict[str, Any]]) -> 
 
 
 def _saved_schedules_root() -> Path:
-    if os.environ.get("SCHEDULE_BUILDER_DESKTOP_RUNTIME") == "1" or getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent / "saved_schedules"
-    return Path.cwd() / "saved_schedules"
+    from binge_schedule.runtime_paths import saved_schedules_root
+
+    return saved_schedules_root()
 
 
 def _saved_schedule_dir(safe_station: str, created_at: datetime) -> Path:

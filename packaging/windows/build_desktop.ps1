@@ -26,6 +26,11 @@ if (Test-Path "$Root\scheduler-ui\package.json") {
     Pop-Location
 }
 
+if (Test-Path "$Root\config\april_2026.yaml") {
+    Write-Host "Writing content-catalog.json into scheduler-ui/dist for desktop bundle..."
+    python -m binge_schedule.cli catalog -c "$Root\config\april_2026.yaml" -o "$Root\scheduler-ui\dist\content-catalog.json"
+}
+
 $args = @(
     "--noconfirm",
     "--clean",
@@ -35,9 +40,12 @@ $args = @(
     "--add-data", "binge_schedule;binge_schedule",
     "--add-data", "config;config",
     "--add-data", "data;data",
-    "--add-data", "cloud;cloud",
     "--add-data", "scheduler-ui\dist;scheduler-ui\dist",
     "--hidden-import", "binge_schedule.api",
+    "--hidden-import", "binge_schedule.content_import",
+    "--hidden-import", "binge_schedule.content_import_wizard",
+    "--hidden-import", "binge_schedule.runtime_paths",
+    "--hidden-import", "multipart",
     "--hidden-import", "fastapi",
     "--hidden-import", "uvicorn",
     "--hidden-import", "starlette",
@@ -51,6 +59,10 @@ $args = @(
     "--collect-all", "openpyxl",
     "desktop_launcher.py"
 )
+
+if (Test-Path "$Root\cloud") {
+    $args += @("--add-data", "cloud;cloud")
+}
 
 python -m PyInstaller @args
 

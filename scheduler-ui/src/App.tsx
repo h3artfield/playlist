@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import SchedulerApp from './SchedulerApp'
 import { fetchCatalog, fetchJson } from './api'
+import { checkScheduleApi } from './scheduleApiBase'
+import ContentSheetEditor, { catalogRowsToEditable } from './ContentSheetEditor'
+import ImportWizard from './ImportWizard'
+import type { CommitImportResponse } from './contentImportTypes'
 import {
   clearScheduleDraft,
   confirmAutoGenerate,
@@ -17,12 +21,17 @@ type CatalogRow = {
   content_type?: string
   display_name?: string
   episode_code?: string
+  episode_key?: string
   episode_number?: string
   episode_title?: string
   genre?: string
   semantic_group?: string
   availability_status?: string
+  original_airdate?: string
+  runtime_minutes?: number | null
+  synopsis_long?: string
   source_sheet?: string
+  source_file?: string
 }
 
 type ContentCategory = 'series' | 'movie' | 'paid_programming'
@@ -385,26 +394,74 @@ function CreateSchedulePage({
 function ArchivePage() {
   const [rows, setRows] = useState<CatalogRow[]>([])
   const [query, setQuery] = useState('')
-  const [status, setStatus] = useState('Loading content catalog...')
   const [category, setCategory] = useState<ContentCategory>('series')
   const [expandedName, setExpandedName] = useState('')
+  const [addContentOpen, setAddContentOpen] = useState(false)
+  const [addMode, setAddMode] = useState<'manual' | 'upload'>('manual')
+  const [importStatus, setImportStatus] = useState('')
+  const [isImporting, setIsImporting] = useState(false)
+  const [contentType, setContentType] = useState<ContentCategory>('series')
+  const [showName, setShowName] = useState('')
+  const [episodeNumber, setEpisodeNumber] = useState('')
+  const [episodeTitle, setEpisodeTitle] = useState('')
+  const [runtimeMinutes, setRuntimeMinutes] = useState('')
+  const [genre, setGenre] = useState('')
+  async function reloadCatalog() {
+    const payload = await fetchCatalog<{ rows?: CatalogRow[] }>()
+    const nextRows = Array.isArray(payload.rows) ? payload.rows : []
+    setRows(nextRows)
+    return nextRows
+  }
 
   useEffect(() => {
-    let cancelled = false
-    fetchCatalog<{ rows?: CatalogRow[] }>()
-      .then((payload: { rows?: CatalogRow[] }) => {
-        if (cancelled) return
-        const nextRows = Array.isArray(payload.rows) ? payload.rows : []
-        setRows(nextRows)
-        setStatus(`${nextRows.length.toLocaleString()} content rows loaded`)
-      })
-      .catch(() => {
-        if (!cancelled) setStatus('Catalog not available yet')
-      })
-    return () => {
-      cancelled = true
-    }
+    void checkScheduleApi()
+    void reloadCatalog()
   }, [])
+
+  async function submitManualImport() {
+    setIsImporting(true)
+    setImportStatus('')
+    try {
+      const result = await fetchJson<{ imported_count?: number; catalog_row_count?: number }>('/api/content/import', {
+        method: 'POST',
+        body: JSON.stringify({
+          content_type: contentType,
+          show_name: showName.trim(),
+          episode_number: episodeNumber.trim(),
+          episode_title: episodeTitle.trim(),
+          runtime_minutes: runtimeMinutes.trim() ? Number(runtimeMinutes) : null,
+          genre: genre.trim(),
+        }),
+      })
+      await reloadCatalog()
+      setShowName('')
+      setEpisodeNumber('')
+      setEpisodeTitle('')
+      setRuntimeMinutes('')
+      setGenre('')
+      setImportStatus(
+        `Added ${result.imported_count ?? 1} row(s). Catalog now has ${(result.catalog_row_count ?? 0).toLocaleString()} rows.`,
+      )
+    } catch (error) {
+      setImportStatus(error instanceof Error ? error.message : 'Could not add content.')
+    } finally {
+      setIsImporting(false)
+    }
+  }
+
+  function handleImportComplete(result: CommitImportResponse) {
+    void reloadCatalog().then(() => {
+      const stats = result.match_stats
+      const detail = stats
+        ? ` (${[stats.new_shows ? `${stats.new_shows} new shows` : '', stats.new_episodes ? `${stats.new_episodes} new episodes` : '', stats.updates ? `${stats.updates} updates` : '']
+            .filter(Boolean)
+            .join(', ')})`
+        : ''
+      setImportStatus(
+        `Imported ${(result.imported_count ?? result.imported_row_count ?? 0).toLocaleString()} row(s)${detail}. Catalog now has ${(result.catalog_row_count ?? 0).toLocaleString()} rows.`,
+      )
+    })
+  }
 
   const summary = useMemo(() => {
     const names = new Set(rows.map((row) => row.display_name).filter(Boolean))
@@ -455,75 +512,164 @@ function ArchivePage() {
   }, [rows])
 
   return (
-    <main className="app-page">
-      <section className="page-header">
-        <div>
-          <p className="eyebrow">Available Content</p>
-          <h1>Available Content</h1>
-          <p>{status}</p>
-        </div>
-        <div className="stat-pill">{summary.names.toLocaleString()} content names</div>
-      </section>
-
-      <section className="tool-panel">
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search shows, movies, episodes, genres" />
-        <div className="content-tabs">
-          <button className={category === 'series' ? 'active' : ''} type="button" onClick={() => setCategory('series')}>
-            Series <span>{categoryCounts.series.toLocaleString()}</span>
-          </button>
-          <button className={category === 'movie' ? 'active' : ''} type="button" onClick={() => setCategory('movie')}>
-            Movies <span>{categoryCounts.movie.toLocaleString()}</span>
-          </button>
-          <button
-            className={category === 'paid_programming' ? 'active' : ''}
-            type="button"
-            onClick={() => setCategory('paid_programming')}
-          >
-            Paid Programming <span>{categoryCounts.paid_programming.toLocaleString()}</span>
-          </button>
-        </div>
-      </section>
-
-      <section className="archive-list">
-        {groupedResults.map(([name, group]) => {
-          const isOpen = expandedName === name
-          const first = group[0]
-          return (
-            <article className="archive-row grouped" key={name}>
-              <button
-                className="archive-row-header"
-                type="button"
-                onClick={() => setExpandedName(isOpen ? '' : name)}
-              >
-                <span>
-                  <strong>{name}</strong>
-                  <small>
-                    {contentCategoryLabel(category)} Â· {first.genre || first.semantic_group || 'unlabeled'} Â· {group.length.toLocaleString()}{' '}
-                    {category === 'series' ? 'episodes' : 'items'}
-                  </small>
-                </span>
-                <b>{isOpen ? 'Hide' : 'Open'}</b>
+    <main className="app-page content-page">
+      <section className={`create-panel add-content-panel${addContentOpen ? ' is-open' : ''}`}>
+        <button className="add-content-toggle" type="button" onClick={() => setAddContentOpen((open) => !open)}>
+          <div>
+            <h2>Add content</h2>
+          </div>
+          <span className="add-content-toggle-label">{addContentOpen ? 'Hide' : 'Show'}</span>
+        </button>
+        {addContentOpen ? (
+          <div className="add-content-body">
+            <div className="content-tabs add-content-tabs">
+              <button className={addMode === 'manual' ? 'active' : ''} type="button" onClick={() => setAddMode('manual')}>
+                Manual entry
               </button>
-              {isOpen ? (
-                <div className="episode-list">
-                  {group.slice(0, 250).map((row, index) => (
-                    <div className="episode-row" key={`${name}-${row.episode_title}-${index}`}>
-                      <span>{row.episode_code || row.episode_number || index + 1}</span>
-                      <strong>{row.episode_title || row.display_name || 'Untitled'}</strong>
-                      <small>{row.availability_status || 'available'}</small>
-                    </div>
-                  ))}
+              <button className={addMode === 'upload' ? 'active' : ''} type="button" onClick={() => setAddMode('upload')}>
+                Upload file
+              </button>
+            </div>
+            {addMode === 'manual' ? (
+              <div className="add-content-form">
+                <div className="add-content-row">
+                  <label className="schedule-field add-field-type">
+                    <span>Type</span>
+                    <select value={contentType} onChange={(event) => setContentType(event.target.value as ContentCategory)}>
+                      <option value="series">Series</option>
+                      <option value="movie">Movie / special</option>
+                      <option value="paid_programming">Paid programming</option>
+                    </select>
+                  </label>
+                  <label className="schedule-field add-field-grow">
+                    <span>{contentType === 'series' ? 'Series name' : 'Title'}</span>
+                    <input value={showName} onChange={(event) => setShowName(event.target.value)} />
+                  </label>
+                  {contentType === 'series' ? (
+                    <label className="schedule-field add-field-narrow">
+                      <span>Episode #</span>
+                      <input value={episodeNumber} onChange={(event) => setEpisodeNumber(event.target.value)} />
+                    </label>
+                  ) : null}
                 </div>
-              ) : null}
-            </article>
-          )
-        })}
-        {!groupedResults.length ? (
-          <article className="archive-row">
-            <strong>No content found</strong>
-            <span>Try another category or search term.</span>
-          </article>
+                {contentType === 'series' ? (
+                  <div className="add-content-row">
+                    <label className="schedule-field add-field-full">
+                      <span>Episode title</span>
+                      <input value={episodeTitle} onChange={(event) => setEpisodeTitle(event.target.value)} />
+                    </label>
+                  </div>
+                ) : null}
+                <div className="add-content-row add-content-row-footer">
+                  <label className="schedule-field add-field-narrow">
+                    <span>Runtime (min)</span>
+                    <input
+                      type="number"
+                      placeholder="30"
+                      value={runtimeMinutes}
+                      onChange={(event) => setRuntimeMinutes(event.target.value)}
+                    />
+                  </label>
+                  <label className="schedule-field add-field-medium">
+                    <span>Genre</span>
+                    <input value={genre} onChange={(event) => setGenre(event.target.value)} placeholder="Optional" />
+                  </label>
+                  <button
+                    className="primary-action card-action add-content-submit"
+                    type="button"
+                    disabled={isImporting || !showName.trim()}
+                    onClick={() => void submitManualImport()}
+                  >
+                    {isImporting ? 'Adding...' : 'Add content'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <ImportWizard
+                catalogRows={rows}
+                uploadActive={addContentOpen && addMode === 'upload'}
+                onClose={() => setImportStatus('')}
+                onImported={(result) => {
+                  setIsImporting(false)
+                  handleImportComplete(result)
+                }}
+              />
+            )}
+            {importStatus ? <p className="panel-status-error import-status-ok">{importStatus}</p> : null}
+          </div>
         ) : null}
+      </section>
+
+      <section className="available-content-section">
+        <header className="available-content-header">
+          <div>
+            <h2>Available Content</h2>
+          </div>
+          <div className="stat-pill">{summary.names.toLocaleString()} content names</div>
+        </header>
+
+        <div className="available-content-toolbar">
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search shows, movies, episodes, genres"
+          />
+          <div className="content-tabs">
+            <button className={category === 'series' ? 'active' : ''} type="button" onClick={() => setCategory('series')}>
+              Series <span>{categoryCounts.series.toLocaleString()}</span>
+            </button>
+            <button className={category === 'movie' ? 'active' : ''} type="button" onClick={() => setCategory('movie')}>
+              Movies <span>{categoryCounts.movie.toLocaleString()}</span>
+            </button>
+            <button
+              className={category === 'paid_programming' ? 'active' : ''}
+              type="button"
+              onClick={() => setCategory('paid_programming')}
+            >
+              Paid Programming <span>{categoryCounts.paid_programming.toLocaleString()}</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="available-content-list">
+          {groupedResults.map(([name, group]) => {
+            const isOpen = expandedName === name
+            const first = group[0]
+            return (
+              <article className="archive-row grouped" key={name}>
+                <button
+                  className="archive-row-header"
+                  type="button"
+                  onClick={() => setExpandedName(isOpen ? '' : name)}
+                >
+                  <span>
+                    <strong>{name}</strong>
+                    <small>
+                      {contentCategoryLabel(category)} · {first.genre || first.semantic_group || 'unlabeled'} ·{' '}
+                      {group.length.toLocaleString()} {category === 'series' ? 'episodes' : 'items'}
+                    </small>
+                  </span>
+                  <b>{isOpen ? 'Hide sheet' : 'Edit sheet'}</b>
+                </button>
+                {isOpen ? (
+                  <ContentSheetEditor
+                    showName={name}
+                    contentType={first.content_type || category}
+                    sourceSheet={first.source_sheet}
+                    rows={catalogRowsToEditable(name, group)}
+                    onSaved={() => void reloadCatalog()}
+                  />
+                ) : null}
+              </article>
+            )
+          })}
+          {!groupedResults.length ? (
+            <article className="archive-row archive-row-empty">
+              <strong>No content found</strong>
+              <span>Try another category or search term.</span>
+            </article>
+          ) : null}
+        </div>
       </section>
     </main>
   )

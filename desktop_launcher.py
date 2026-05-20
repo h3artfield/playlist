@@ -95,9 +95,14 @@ def _resolve_react_dist() -> Path | None:
     return None
 
 
-def _resource_root_for_react_dist(dist_path: Path) -> Path:
-    # scheduler-ui/dist sits under the resource root in source and PyInstaller builds.
-    return dist_path.parent.parent
+def _desktop_working_directory(react_dist: Path | None) -> Path:
+    """Use the install/exe folder so bundled config/ and writable config/ resolve correctly."""
+    exe_dir = Path(sys.executable).resolve().parent
+    if react_dist is not None:
+        for root in (exe_dir, react_dist.parent.parent, react_dist.parent.parent.parent):
+            if (root / "config").is_dir() or (root / "scheduler-ui").is_dir():
+                return root
+    return exe_dir
 
 
 def main() -> int:
@@ -108,7 +113,7 @@ def main() -> int:
             if react_dist is not None:
                 import uvicorn
 
-                root = _resource_root_for_react_dist(react_dist)
+                root = _desktop_working_directory(react_dist)
                 os.chdir(root)
                 logf.write(f"Resolved React UI path: {react_dist}\n")
                 logf.write(f"Working directory: {root}\n")
