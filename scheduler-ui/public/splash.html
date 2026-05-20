@@ -37,7 +37,7 @@
     </style>
   </head>
   <body>
-    <video id="splash" src="/splash.mp4" autoplay playsinline></video>
+    <video id="splash" src="/splash.mp4" autoplay muted playsinline preload="auto"></video>
     <p class="skip-hint">Press Esc or click to skip</p>
     <script>
       const appUrl = '/'
@@ -51,12 +51,22 @@
       }
 
       video.addEventListener('ended', openApp)
-      video.addEventListener('error', openApp)
+      video.addEventListener('error', () => {
+        console.warn('Splash video failed to load; opening app.')
+        setTimeout(openApp, 600)
+      })
       document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') openApp()
       })
       document.addEventListener('click', openApp)
-      video.play().catch(openApp)
+
+      // Intro always plays muted (no sound).
+      video.defaultMuted = true
+      video.muted = true
+      const started = video.play()
+      if (started && typeof started.catch === 'function') {
+        started.catch(() => setTimeout(openApp, 1200))
+      }
     </script>
   </body>
 </html>

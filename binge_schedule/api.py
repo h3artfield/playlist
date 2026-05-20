@@ -541,11 +541,33 @@ def create_app() -> FastAPI:
             "station_id": station_id,
         }
 
+    _register_splash_routes(app)
     ui_dist = _ui_dist_path()
     if ui_dist is not None:
         app.mount("/", StaticFiles(directory=ui_dist, html=True), name="scheduler-ui")
 
     return app
+
+
+def _register_splash_routes(app: FastAPI) -> None:
+    from fastapi.responses import FileResponse
+
+    dist = _ui_dist_path()
+    if dist is None:
+        return
+    splash_html = dist / "splash.html"
+    splash_mp4 = dist / "splash.mp4"
+    if splash_html.is_file():
+
+        @app.get("/splash.html")
+        def splash_page() -> FileResponse:
+            return FileResponse(splash_html, media_type="text/html")
+
+    if splash_mp4.is_file():
+
+        @app.get("/splash.mp4")
+        def splash_video() -> FileResponse:
+            return FileResponse(splash_mp4, media_type="video/mp4")
 
 
 def _static_catalog_payload() -> dict[str, Any] | None:
