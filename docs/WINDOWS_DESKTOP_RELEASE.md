@@ -87,6 +87,7 @@ The build script:
 ## Dev vs desktop
 
 - **Do not run** `.\scripts\start-dev-api.ps1` while the desktop app is open — both use port **8765**.
+- The packaged `.exe` **never** launches the legacy Streamlit UI. If you see Streamlit in a browser tab, reinstall the latest installer (1.0.30+).
 - For development, use `http://localhost:5173` (Vite) with the dev API on 8765.
 
 ## Troubleshooting

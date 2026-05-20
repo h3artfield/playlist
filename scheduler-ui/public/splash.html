@@ -40,33 +40,49 @@
     <video id="splash" src="/splash.mp4" autoplay muted playsinline preload="auto"></video>
     <p class="skip-hint">Press Esc or click to skip</p>
     <script>
-      const appUrl = '/'
       const video = document.getElementById('splash')
       let opened = false
 
       function openApp() {
         if (opened) return
         opened = true
-        window.location.replace(appUrl)
+        window.location.replace('/')
       }
 
-      video.addEventListener('ended', openApp)
-      video.addEventListener('error', () => {
-        console.warn('Splash video failed to load; opening app.')
-        setTimeout(openApp, 600)
-      })
+      async function waitForApi() {
+        for (let attempt = 0; attempt < 240; attempt += 1) {
+          try {
+            const response = await fetch('/api/health', { cache: 'no-store' })
+            if (response.ok) return true
+          } catch {
+            // API still starting — keep polling while the intro plays.
+          }
+          await new Promise((resolve) => setTimeout(resolve, 250))
+        }
+        return false
+      }
+
+      function videoFinished() {
+        return new Promise((resolve) => {
+          if (video.ended) {
+            resolve()
+            return
+          }
+          video.addEventListener('ended', () => resolve(), { once: true })
+          video.addEventListener('error', () => resolve(), { once: true })
+        })
+      }
+
       document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') openApp()
       })
       document.addEventListener('click', openApp)
 
-      // Intro always plays muted (no sound).
       video.defaultMuted = true
       video.muted = true
-      const started = video.play()
-      if (started && typeof started.catch === 'function') {
-        started.catch(() => setTimeout(openApp, 1200))
-      }
+      void video.play().catch(() => undefined)
+
+      void Promise.all([videoFinished(), waitForApi()]).then(() => openApp())
     </script>
   </body>
 </html>

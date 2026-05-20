@@ -84,28 +84,24 @@ def _react_missing_message() -> str:
 def _run_react_api_server(port: int) -> None:
     import uvicorn
 
-    uvicorn.run("binge_schedule.api:app", host=API_HOST, port=port, log_level="info")
+    uvicorn.run("binge_schedule.api:app", host=API_HOST, port=port, log_level="warning")
 
 
-def _ensure_api_running(logf) -> str:
-    from binge_schedule.desktop_window import pick_api_port, wait_for_api
+def _prepare_api(logf) -> str:
+    """Pick a port and start the API in the background. The UI opens immediately."""
+    from binge_schedule.desktop_window import api_health_ok, pick_api_port
 
     port = pick_api_port(preferred=API_PORT)
     base_url = f"http://{API_HOST}:{port}"
     logf.write(f"API port: {port}\n")
 
-    if wait_for_api(base_url, timeout_seconds=2.0):
+    if api_health_ok(base_url):
         logf.write(f"Reusing API already listening on port {port}.\n")
         return base_url
 
     server = threading.Thread(target=_run_react_api_server, args=(port,), daemon=True)
     server.start()
-    logf.write(f"Started API server thread on port {port}.\n")
-    if not wait_for_api(base_url, timeout_seconds=90.0):
-        raise RuntimeError(
-            f"Schedule Builder API did not start on port {port}. "
-            "See the log file in %LOCALAPPDATA%\\ScheduleBuilder\\logs\\"
-        )
+    logf.write(f"Started API server thread on port {port} (window opens while loading).\n")
     return base_url
 
 
@@ -123,10 +119,9 @@ def _open_react_desktop_window(logf) -> int:
     from binge_schedule.app_settings import load_settings
     from binge_schedule.desktop_window import open_native_window
 
-    base_url = _ensure_api_running(logf)
+    base_url = _prepare_api(logf)
     splash_url = f"{base_url}/splash.html"
     window_mode = str(load_settings().get("desktop_window_mode") or "windowed")
-    logf.write("API health check passed.\n")
     logf.write(f"Desktop window mode: {window_mode}\n")
     open_native_window(splash_url=splash_url, window_mode=window_mode)
     logf.write("Desktop window closed.\n")

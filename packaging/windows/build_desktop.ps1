@@ -63,7 +63,6 @@ $args = @(
     "--clean",
     "--windowed",
     "--name", "ScheduleBuilder",
-    "--add-data", "streamlit_app.py;.",
     "--add-data", "binge_schedule;binge_schedule",
     "--add-data", "config;config",
     "--add-data", "data;data",
@@ -80,10 +79,6 @@ $args = @(
     "--collect-submodules", "webview",
     "--hidden-import", "starlette",
     "--hidden-import", "pydantic",
-    "--collect-all", "fastapi",
-    "--collect-all", "uvicorn",
-    "--collect-all", "starlette",
-    "--collect-all", "pydantic",
     "--collect-all", "pandas",
     "--collect-all", "openpyxl",
     "desktop_launcher.py"
@@ -105,6 +100,10 @@ if (-not (Test-Path $bundledReact)) {
     throw "PyInstaller bundle is missing React UI at $bundledReact"
 }
 Write-Host "Verified bundled React UI: $bundledReact"
+if (Test-Path $iconIco) {
+    Copy-Item $iconIco $distApp -Force
+    Write-Host "Copied ScheduleBuilder.ico for shortcuts and shell icon refresh."
+}
 if ($Demo) {
     $demoSaved = "$Root\packaging\demo_assets\saved_schedules"
     if (Test-Path $demoSaved) {

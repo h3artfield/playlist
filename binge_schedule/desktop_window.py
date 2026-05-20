@@ -27,13 +27,16 @@ def port_is_listening(host: str, port: int) -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
-def pick_api_port(*, preferred: int = 8765, span: int = 35) -> int:
-    """Reuse a healthy API or pick the first port that is not already listening."""
+def pick_api_port(*, preferred: int = 8765, span: int = 20) -> int:
+    """Reuse a healthy API or pick the first free port (fast scan)."""
     host = "127.0.0.1"
-    for port in range(preferred, preferred + span):
+    if api_health_ok(f"http://{host}:{preferred}"):
+        return preferred
+    if not port_is_listening(host, preferred):
+        return preferred
+    for port in range(preferred + 1, preferred + span):
         if api_health_ok(f"http://{host}:{port}"):
             return port
-    for port in range(preferred, preferred + span):
         if not port_is_listening(host, port):
             return port
     return preferred
