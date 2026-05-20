@@ -1,8 +1,7 @@
 """Windows desktop launcher for Schedule Builder.
 
-Built with PyInstaller (one-folder mode). Starts the React UI on a local API
-and opens it in a native desktop window (splash video, then the app).
-Falls back to Streamlit or the default browser when the React bundle is missing.
+Packaged builds always use the bundled React UI in a native desktop window.
+Streamlit is not used for the installed desktop app.
 """
 
 from __future__ import annotations
@@ -15,7 +14,8 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from streamlit.web import cli as stcli
+API_HOST = "127.0.0.1"
+API_PORT = 8765
 
 
 def _logs_dir() -> Path:
@@ -23,6 +23,10 @@ def _logs_dir() -> Path:
     p = base / "ScheduleBuilder" / "logs"
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _is_packaged() -> bool:
+    return getattr(sys, "frozen", False)
 
 
 def _show_error_dialog(title: str, message: str) -> None:
@@ -35,68 +39,25 @@ def _show_error_dialog(title: str, message: str) -> None:
         messagebox.showerror(title, message)
         root.destroy()
     except Exception:
-        # If dialog cannot render, we still have the logfile.
         pass
 
 
-def _ensure_streamlit_credentials() -> None:
-    """Prevent first-run stdin onboarding prompt in packaged launches."""
-    cfg_dir = Path.home() / ".streamlit"
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    creds = cfg_dir / "credentials.toml"
-    if not creds.is_file():
-        creds.write_text('[general]\nemail = ""\n', encoding="utf-8")
-
-
-def _resolve_app_script() -> Path:
-    here = Path(__file__).resolve().parent
-    exe_dir = Path(sys.executable).resolve().parent
-    meipass = Path(getattr(sys, "_MEIPASS", "")) if getattr(sys, "_MEIPASS", None) else None
-    candidates = [
-        here / "streamlit_app.py",
-        exe_dir / "streamlit_app.py",
-        exe_dir / "_internal" / "streamlit_app.py",
-    ]
-    if meipass is not None:
-        candidates.append(meipass / "streamlit_app.py")
-    for p in candidates:
-        if p.is_file():
-            return p
-    search_roots = [exe_dir, here]
-    if meipass is not None:
-        search_roots.append(meipass)
-    for root in search_roots:
-        try:
-            for p in root.rglob("streamlit_app.py"):
-                if p.is_file():
-                    return p
-        except Exception:
-            continue
-    raise FileNotFoundError(
-        "Could not find bundled streamlit_app.py. Tried: "
-        + ", ".join(str(p) for p in candidates)
-    )
-
-
 def _resolve_react_dist() -> Path | None:
-    here = Path(__file__).resolve().parent
-    exe_dir = Path(sys.executable).resolve().parent
-    meipass = Path(getattr(sys, "_MEIPASS", "")) if getattr(sys, "_MEIPASS", None) else None
-    candidates = [
-        here / "scheduler-ui" / "dist",
-        exe_dir / "scheduler-ui" / "dist",
-        exe_dir / "_internal" / "scheduler-ui" / "dist",
-    ]
-    if meipass is not None:
-        candidates.append(meipass / "scheduler-ui" / "dist")
-    for p in candidates:
-        if (p / "index.html").is_file():
-            return p
-    return None
+    from binge_schedule.runtime_paths import react_dist_path
+
+    return react_dist_path()
 
 
-API_HOST = "127.0.0.1"
-API_PORT = 8765
+def _react_missing_message() -> str:
+    from binge_schedule.runtime_paths import resource_search_roots
+
+    roots = ", ".join(str(p) for p in resource_search_roots())
+    return (
+        "The React Schedule Builder UI is missing from this install.\n\n"
+        f"Searched under: {roots}\n\n"
+        "Reinstall from the latest ScheduleBuilderSetup.exe build. "
+        "If you built locally, run scheduler-ui npm build before packaging."
+    )
 
 
 def _run_react_api_server() -> None:
@@ -144,6 +105,16 @@ def _ensure_api_running(logf) -> str:
     return base_url
 
 
+def _desktop_working_directory(react_dist: Path) -> Path:
+    from binge_schedule.runtime_paths import executable_dir
+
+    exe_dir = executable_dir()
+    for root in (exe_dir, react_dist.parent.parent, react_dist.parent.parent.parent):
+        if (root / "config").is_dir() or (root / "scheduler-ui").is_dir():
+            return root
+    return exe_dir
+
+
 def _open_react_desktop_window(logf) -> int:
     from binge_schedule.app_settings import load_settings
     from binge_schedule.desktop_window import open_native_window
@@ -153,76 +124,67 @@ def _open_react_desktop_window(logf) -> int:
     window_mode = str(load_settings().get("desktop_window_mode") or "windowed")
     logf.write("API health check passed.\n")
     logf.write(f"Desktop window mode: {window_mode}\n")
-    try:
-        open_native_window(splash_url=splash_url, window_mode=window_mode)
-        logf.write("Desktop window closed.\n")
-        return 0
-    except RuntimeError as exc:
-        logf.write(f"Native window unavailable ({exc}); falling back to default browser.\n")
-        import webbrowser
-
-        threading.Timer(1.2, lambda: webbrowser.open(splash_url)).start()
-        _run_react_api_server()
-        return 0
+    open_native_window(splash_url=splash_url, window_mode=window_mode)
+    logf.write("Desktop window closed.\n")
+    return 0
 
 
-def _desktop_working_directory(react_dist: Path | None) -> Path:
-    """Use the install/exe folder so bundled config/ and writable config/ resolve correctly."""
-    exe_dir = Path(sys.executable).resolve().parent
-    if react_dist is not None:
-        for root in (exe_dir, react_dist.parent.parent, react_dist.parent.parent.parent):
-            if (root / "config").is_dir() or (root / "scheduler-ui").is_dir():
-                return root
-    return exe_dir
+def _run_streamlit_dev_fallback(logf) -> int:
+    """Legacy Streamlit UI — development only when React dist is not built."""
+    from streamlit.web import cli as stcli
+
+    here = Path(__file__).resolve().parent
+    app_path = here / "streamlit_app.py"
+    if not app_path.is_file():
+        app_path = Path.cwd() / "streamlit_app.py"
+    if not app_path.is_file():
+        raise FileNotFoundError("streamlit_app.py not found for dev fallback.")
+
+    logf.write(f"Dev fallback: Streamlit at {app_path}\n")
+    os.chdir(app_path.parent)
+    os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
+    os.environ.setdefault("STREAMLIT_GLOBAL_DEVELOPMENT_MODE", "false")
+    sys.argv = [
+        "streamlit",
+        "run",
+        str(app_path),
+        "--server.headless=false",
+        "--browser.gatherUsageStats=false",
+        "--server.fileWatcherType=none",
+    ]
+    return int(stcli.main())
 
 
 def main() -> int:
     log_path = _logs_dir() / f"startup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
     with log_path.open("w", encoding="utf-8") as logf:
         try:
-            react_dist = _resolve_react_dist()
-            if react_dist is not None:
-                root = _desktop_working_directory(react_dist)
-                os.chdir(root)
-                logf.write(f"Resolved React UI path: {react_dist}\n")
-                logf.write(f"Working directory: {root}\n")
-                os.environ.setdefault("SCHEDULE_BUILDER_DESKTOP_RUNTIME", "1")
-                os.environ.setdefault("SCHEDULE_BUILDER_REACT_DIST", str(react_dist))
-                demo_schedule = (
-                    root / "saved_schedules" / "test" / "2026-05-19_21-33-48" / "base_schedule.yaml"
-                )
-                if demo_schedule.is_file():
-                    os.environ.setdefault("SCHEDULE_BUILDER_DEFAULT_CONFIG", "config/blank_schedule.yaml")
-                with contextlib.redirect_stdout(logf), contextlib.redirect_stderr(logf):
-                    return _open_react_desktop_window(logf)
-
-            app_path = _resolve_app_script()
-            logf.write(f"Resolved app path: {app_path}\n")
-            os.chdir(app_path.parent)
-            logf.write(f"Working directory: {app_path.parent}\n")
-            _ensure_streamlit_credentials()
-            logf.write("Ensured Streamlit credentials file.\n")
-            # Desktop installs should not show the desktop download CTA.
             os.environ.setdefault("SCHEDULE_BUILDER_DESKTOP_RUNTIME", "1")
-            # Avoid telemetry prompts and keep desktop behavior predictable.
-            os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
-            os.environ.setdefault("STREAMLIT_GLOBAL_DEVELOPMENT_MODE", "false")
-            sys.argv = [
-                "streamlit",
-                "run",
-                str(app_path),
-                "--server.headless=false",
-                "--browser.gatherUsageStats=false",
-                "--server.fileWatcherType=none",
-            ]
+            react_dist = _resolve_react_dist()
+            logf.write(f"Packaged build: {_is_packaged()}\n")
+            logf.write(f"Executable: {sys.executable}\n")
+
+            if react_dist is None:
+                logf.write("React dist not found.\n")
+                if _is_packaged():
+                    message = _react_missing_message()
+                    logf.write(message + "\n")
+                    _show_error_dialog("Schedule Builder failed to start", f"{message}\n\nLog file:\n{log_path}")
+                    return 1
+                with contextlib.redirect_stdout(logf), contextlib.redirect_stderr(logf):
+                    return _run_streamlit_dev_fallback(logf)
+
+            root = _desktop_working_directory(react_dist)
+            os.chdir(root)
+            logf.write(f"Resolved React UI path: {react_dist}\n")
+            logf.write(f"Working directory: {root}\n")
+            os.environ.setdefault("SCHEDULE_BUILDER_REACT_DIST", str(react_dist))
+            demo_schedule = root / "saved_schedules" / "test" / "2026-05-19_21-33-48" / "base_schedule.yaml"
+            if demo_schedule.is_file():
+                os.environ.setdefault("SCHEDULE_BUILDER_DEFAULT_CONFIG", "config/blank_schedule.yaml")
+
             with contextlib.redirect_stdout(logf), contextlib.redirect_stderr(logf):
-                rc = int(stcli.main())
-            if rc != 0:
-                _show_error_dialog(
-                    "Schedule Builder failed to start",
-                    f"Startup exited with code {rc}.\n\nLog file:\n{log_path}",
-                )
-            return rc
+                return _open_react_desktop_window(logf)
         except Exception:
             logf.write(traceback.format_exc())
             logf.flush()
@@ -236,4 +198,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

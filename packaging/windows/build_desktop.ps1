@@ -40,8 +40,17 @@ if (Test-Path "$Root\scheduler-ui\package.json") {
     } else {
         npm install
     }
-    npm run build
+    if ($LASTEXITCODE -ne 0) { throw "npm install failed." }
+    # Use Vite directly so CI/local builds do not depend on tsc being on PATH.
+    node node_modules/vite/bin/vite.js build
+    if ($LASTEXITCODE -ne 0) { throw "React UI build failed." }
+    if (-not (Test-Path "dist\index.html")) {
+        throw "React UI build did not produce dist/index.html."
+    }
+    Write-Host "React UI built: dist/index.html"
     Pop-Location
+} else {
+    throw "scheduler-ui/package.json not found; cannot build desktop app."
 }
 
 if (Test-Path "$Root\config\april_2026.yaml") {
@@ -71,7 +80,6 @@ $args = @(
     "--collect-submodules", "webview",
     "--hidden-import", "starlette",
     "--hidden-import", "pydantic",
-    "--collect-all", "streamlit",
     "--collect-all", "fastapi",
     "--collect-all", "uvicorn",
     "--collect-all", "starlette",
@@ -92,6 +100,11 @@ if (Test-Path "$Root\cloud") {
 python -m PyInstaller @args
 
 $distApp = "$Root\dist\ScheduleBuilder"
+$bundledReact = "$distApp\_internal\scheduler-ui\dist\index.html"
+if (-not (Test-Path $bundledReact)) {
+    throw "PyInstaller bundle is missing React UI at $bundledReact"
+}
+Write-Host "Verified bundled React UI: $bundledReact"
 if ($Demo) {
     $demoSaved = "$Root\packaging\demo_assets\saved_schedules"
     if (Test-Path $demoSaved) {
