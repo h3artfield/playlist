@@ -17,10 +17,27 @@ def api_health_ok(base_url: str, *, timeout: float = 0.75) -> bool:
         with urllib.request.urlopen(health_url, timeout=timeout) as response:
             if response.status != 200:
                 return False
-            body = response.read(200).decode("utf-8", errors="ignore")
-            return "schedule" in body.lower() or "ok" in body.lower() or "status" in body.lower()
+            body = response.read(400).decode("utf-8", errors="ignore")
+            return '"status"' in body and '"ok"' in body
     except (urllib.error.URLError, TimeoutError, OSError):
         return False
+
+
+def pick_api_port(*, preferred: int = 8765, span: int = 35) -> int:
+    """Choose a port for the desktop API — reuse healthy instance or first free port."""
+    host = "127.0.0.1"
+    for port in range(preferred, preferred + span):
+        if api_health_ok(f"http://{host}:{port}"):
+            return port
+    if port_is_listening(host, preferred):
+        free_port_on_windows(preferred, aggressive=True)
+        time.sleep(0.4)
+        if not port_is_listening(host, preferred):
+            return preferred
+    for port in range(preferred, preferred + span):
+        if not port_is_listening(host, port):
+            return port
+    return preferred + 1
 
 
 def port_is_listening(host: str, port: int) -> bool:

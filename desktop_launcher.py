@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 API_HOST = "127.0.0.1"
-API_PORT = 8765
+API_PORT = 8765  # default; desktop may use 8766+ if 8765 is stuck
 
 
 def _logs_dir() -> Path:
@@ -81,52 +81,29 @@ def _react_missing_message() -> str:
     )
 
 
-def _run_react_api_server() -> None:
+def _run_react_api_server(port: int) -> None:
     import uvicorn
 
-    uvicorn.run("binge_schedule.api:app", host=API_HOST, port=API_PORT, log_level="info")
+    uvicorn.run("binge_schedule.api:app", host=API_HOST, port=port, log_level="info")
 
 
 def _ensure_api_running(logf) -> str:
-    from binge_schedule.desktop_window import (
-        api_health_ok,
-        free_port_on_windows,
-        port_is_listening,
-        wait_for_api,
-    )
+    from binge_schedule.desktop_window import pick_api_port, wait_for_api
 
-    base_url = f"http://{API_HOST}:{API_PORT}"
+    port = pick_api_port(preferred=API_PORT)
+    base_url = f"http://{API_HOST}:{port}"
+    logf.write(f"API port: {port}\n")
 
-    if api_health_ok(base_url):
-        logf.write("Reusing API already listening on port 8765.\n")
+    if wait_for_api(base_url, timeout_seconds=1.5):
+        logf.write(f"Reusing API already listening on port {port}.\n")
         return base_url
 
-    if port_is_listening(API_HOST, API_PORT):
-        from binge_schedule.desktop_window import _listeners_on_port
-
-        pids = _listeners_on_port(API_PORT)
-        logf.write(f"Port 8765 is in use (listener PIDs: {pids or 'unknown'}).\n")
-        logf.write("Attempting to stop prior Schedule Builder / dev API...\n")
-        aggressive = os.environ.get("SCHEDULE_BUILDER_DESKTOP_RUNTIME") == "1"
-        if free_port_on_windows(API_PORT, aggressive=aggressive):
-            logf.write("Freed port 8765.\n")
-        elif api_health_ok(base_url):
-            logf.write("Port in use but Schedule Builder API health check passed; reusing it.\n")
-            return base_url
-        else:
-            raise RuntimeError(
-                "Port 8765 is still in use. Close any Schedule Builder window, stop the dev API "
-                "(scripts/start-dev-api.ps1), or run: "
-                "Get-NetTCPConnection -LocalPort 8765 -State Listen | "
-                "ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }"
-            )
-
-    server = threading.Thread(target=_run_react_api_server, daemon=True)
+    server = threading.Thread(target=_run_react_api_server, args=(port,), daemon=True)
     server.start()
-    logf.write("Started API server thread.\n")
+    logf.write(f"Started API server thread on port {port}.\n")
     if not wait_for_api(base_url):
         raise RuntimeError(
-            "Schedule Builder API did not start on port 8765. "
+            f"Schedule Builder API did not start on port {port}. "
             "See the log file in %LOCALAPPDATA%\\ScheduleBuilder\\logs\\"
         )
     return base_url
