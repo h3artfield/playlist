@@ -835,6 +835,17 @@ function episodeFitsSlot(ep: Episode, slotMinutes: number | null): boolean {
   return ep.durationMinutes <= slotMinutes
 }
 
+function episodeFitsSelection(ep: Episode, rangeDurations: number[]): boolean {
+  if (!rangeDurations.length) return true
+  return rangeDurations.some((minutes) => episodeFitsSlot(ep, minutes))
+}
+
+function slotRequirementLabel(minutes: number): string {
+  if (minutes === 120) return '2 hr slot'
+  if (minutes === 60) return '1 hr slot'
+  return `${minutes} min slot`
+}
+
 export default function SchedulerApp({
   stationId,
   initialBlocks,
@@ -923,15 +934,19 @@ export default function SchedulerApp({
   const availableEpisodes = catalogEpisodes.length ? catalogEpisodes : SAMPLE_EPISODES
   const selectedRangeDurations = useMemo(() => selectedRanges.map((range) => minutesBetween(range.start, range.end)), [selectedRanges])
   const selectedSlotMinutes = selectedRangeDurations.length ? Math.min(...selectedRangeDurations) : null
-  const selectableEpisodes = useMemo(
+  const episodesMatchingContentMode = useMemo(
     () =>
       availableEpisodes.filter((ep) => {
         const isMovie = isMovieEpisode(ep)
         if (contentMode === 'movies' && !isMovie) return false
         if (contentMode === 'series' && isMovie) return false
-        return episodeFitsSlot(ep, selectedSlotMinutes)
+        return true
       }),
-    [availableEpisodes, contentMode, selectedSlotMinutes],
+    [availableEpisodes, contentMode],
+  )
+  const selectableEpisodes = useMemo(
+    () => episodesMatchingContentMode.filter((ep) => episodeFitsSelection(ep, selectedRangeDurations)),
+    [episodesMatchingContentMode, selectedRangeDurations],
   )
   const shows = useMemo(() => unique(selectableEpisodes.map((ep) => ep.show)).sort(), [selectableEpisodes])
   const matchingShow = shows.find((show) => show.toLowerCase() === showQuery.trim().toLowerCase()) || ''
@@ -940,6 +955,10 @@ export default function SchedulerApp({
     if (!q || matchingShow) return shows
     return shows.filter((show) => show.toLowerCase().includes(q))
   }, [matchingShow, showQuery, shows])
+  const allEpisodesForShow = useMemo(
+    () => episodesMatchingContentMode.filter((ep) => ep.show === matchingShow),
+    [episodesMatchingContentMode, matchingShow],
+  )
   const episodesForShow = useMemo(
     () => selectableEpisodes.filter((ep) => ep.show === matchingShow),
     [selectableEpisodes, matchingShow],
@@ -952,7 +971,7 @@ export default function SchedulerApp({
   const selectedRange = activeRanges[0] || null
   const selectedLastRange = activeRanges[activeRanges.length - 1] || null
   const inferredStartingEpisode = useMemo(() => {
-    if (!matchingShow || !selectedRanges.length || !episodesForShow.length) return null
+    if (!matchingShow || !selectedRanges.length || !allEpisodesForShow.length) return null
     const selectionStart = selectedRanges.reduce(
       (earliest, range) => (range.start < earliest ? range.start : earliest),
       selectedRanges[0].start,
@@ -962,15 +981,32 @@ export default function SchedulerApp({
       .sort((a, b) => new Date(b.start).getTime() - new Date(a.start).getTime())
 
     for (const block of priorBlocks) {
-      const previousIndex = episodesForShow.findIndex((ep) => {
+      const previousIndex = allEpisodesForShow.findIndex((ep) => {
         return ep.id === block.episodeId || ep.code === block.episodeCode || ep.title === block.episodeTitle
       })
-      if (previousIndex >= 0 && previousIndex + 1 < episodesForShow.length) {
-        return episodesForShow[previousIndex + 1]
+      if (previousIndex >= 0) {
+        for (let index = previousIndex + 1; index < allEpisodesForShow.length; index += 1) {
+          const candidate = allEpisodesForShow[index]
+          if (episodeFitsSelection(candidate, selectedRangeDurations)) {
+            return candidate
+          }
+        }
       }
     }
     return null
-  }, [blocks, episodesForShow, matchingShow, selectedRanges])
+  }, [allEpisodesForShow, blocks, matchingShow, selectedRangeDurations, selectedRanges])
+  const chosenStartingEpisode = useMemo(() => {
+    if (startingEpisodeId) {
+      return allEpisodesForShow.find((ep) => ep.id === startingEpisodeId) ?? null
+    }
+    return inferredStartingEpisode
+  }, [allEpisodesForShow, inferredStartingEpisode, startingEpisodeId])
+  const canCommitFill = Boolean(
+    selectedRanges.length &&
+      matchingShow &&
+      chosenStartingEpisode &&
+      episodeFitsSelection(chosenStartingEpisode, selectedRangeDurations),
+  )
   const previewRanges = liveSelectionRanges.length ? liveSelectionRanges : selectedRanges
   const baseCalendarStart = useMemo(() => {
     const base = new Date(`${startDate}T00:00:00`)
@@ -1093,9 +1129,11 @@ export default function SchedulerApp({
   function fillSelectedRange() {
     const startEpisodeId = startingEpisodeId || inferredStartingEpisode?.id || ''
     if (!selectedRanges.length || !matchingShow || !startEpisodeId) return
-    const episodePool = episodesForShow
+    const episodePool = allEpisodesForShow
     const startIndex = episodePool.findIndex((ep) => ep.id === startEpisodeId)
     if (startIndex < 0) return
+    const startingEpisode = episodePool[startIndex]
+    if (!episodeFitsSelection(startingEpisode, selectedRangeDurations)) return
 
     const nextBlocks: ScheduledBlock[] = []
     let epIndex = startIndex
@@ -1105,7 +1143,10 @@ export default function SchedulerApp({
       while (cursor < range.end && epIndex < episodePool.length) {
         const ep = episodePool[epIndex]
         const remainingMinutes = minutesBetween(cursor, range.end)
-        if (!episodeFitsSlot(ep, remainingMinutes)) break
+        if (!episodeFitsSlot(ep, remainingMinutes)) {
+          epIndex += 1
+          continue
+        }
         const isMovie = isMovieEpisode(ep)
         const isRepeatableLiteral = isRepeatableLiteralEpisode(ep)
         const end = isMovie ? new Date(range.end) : addMinutes(cursor, ep.durationMinutes)
@@ -1773,7 +1814,7 @@ export default function SchedulerApp({
               </div>
               <span className="picker-note">
                 Showing {filteredShows.length.toLocaleString()} of {shows.length.toLocaleString()} content items
-                {selectedSlotMinutes ? ` that fit ${selectedSlotMinutes} minutes` : ''}
+                {selectedRangeDurations.length ? ' with episodes that fit your selection' : ''}
               </span>
             </label>
 
@@ -1787,16 +1828,25 @@ export default function SchedulerApp({
                 <option value="">
                   {inferredStartingEpisode ? `Auto: ${inferredStartingEpisode.code} - ${inferredStartingEpisode.title}` : 'Select episode'}
                 </option>
-                {episodesForShow.map((ep) => (
-                  <option key={ep.id} value={ep.id}>
-                    {ep.code} — {ep.title}
-                    {movieNeedsTimingNote(ep, selectedSlotMinutes) ? ' (needs timing note)' : ''}
-                  </option>
-                ))}
+                {allEpisodesForShow.map((ep) => {
+                  const fits = episodeFitsSelection(ep, selectedRangeDurations)
+                  return (
+                    <option key={ep.id} value={ep.id} disabled={!fits}>
+                      {ep.code} — {ep.title}
+                      {!fits ? ` (needs ${slotRequirementLabel(ep.durationMinutes)})` : ''}
+                      {fits && movieNeedsTimingNote(ep, selectedSlotMinutes) ? ' (needs timing note)' : ''}
+                    </option>
+                  )
+                })}
               </select>
               {inferredStartingEpisode && !startingEpisodeId ? (
                 <span className="picker-note">
                   Will continue with {inferredStartingEpisode.code} — {inferredStartingEpisode.title}
+                </span>
+              ) : null}
+              {allEpisodesForShow.some((ep) => !episodeFitsSelection(ep, selectedRangeDurations)) ? (
+                <span className="picker-note">
+                  Some episodes need a larger slot than you selected (for example a 2-hour pilot needs a 2-hour block).
                 </span>
               ) : null}
               {episodesForShow.some((ep) => movieNeedsTimingNote(ep, selectedSlotMinutes)) ? (
@@ -1807,7 +1857,7 @@ export default function SchedulerApp({
             <button
               className="primary-action wide"
               type="button"
-              disabled={!selectedRanges.length || !matchingShow || (!startingEpisodeId && !inferredStartingEpisode)}
+              disabled={!canCommitFill}
               onClick={fillSelectedRange}
             >
               Commit
