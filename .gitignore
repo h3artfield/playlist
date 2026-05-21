@@ -18,3 +18,4 @@ config/episode_cursors.json
 config/imported_content_catalog.json
 saved_schedules/
 data/imported/
+packaging/windows/redist/vc_redist.x64.exe

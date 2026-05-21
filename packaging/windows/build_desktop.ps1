@@ -100,6 +100,9 @@ if (Test-Path "$Root\cloud") {
 python -m PyInstaller @args
 
 $distApp = "$Root\dist\ScheduleBuilder"
+& "$Root\scripts\bundle_desktop_runtime.ps1" -AppDir $distApp
+
+& "$Root\scripts\fetch_vc_redist.ps1"
 $bundledReact = "$distApp\_internal\scheduler-ui\dist\index.html"
 if (-not (Test-Path $bundledReact)) {
     throw "PyInstaller bundle is missing React UI at $bundledReact"

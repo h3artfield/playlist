@@ -95,6 +95,7 @@ The build script:
 - Startup logs: `%LOCALAPPDATA%\ScheduleBuilder\logs\startup-*.log`
 - If upload fails in desktop, rebuild with a recent `build_desktop.ps1` and reinstall.
 - `GET /api/health` should report `"content_import_wizard": true`.
+- **`api-ms-win-core-path-l1-1-0.dll` missing:** Install [Microsoft Visual C++ Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe), run Windows Update, then reinstall Schedule Builder **1.0.37+** (installer runs the redist automatically when needed). Requires **Windows 10 version 1607** or later (or Windows 11).
 
 ## App icon
 
