@@ -67,6 +67,23 @@ export default function ImportWizard({ catalogRows, uploadActive, onClose, onImp
   const [apiReady, setApiReady] = useState<boolean | null>(null)
 
   const includedConfigs = useMemo(() => configs.filter((c) => c.include), [configs])
+  const titleMappingReady = useMemo(
+    () => includedConfigs.some((config) => Boolean(config.mapping.title?.trim())),
+    [includedConfigs],
+  )
+  const importBlockers = useMemo(() => {
+    if (!includedConfigs.length) return 'Select at least one sheet to include.'
+    if (!titleMappingReady) return 'Map the episode or movie title column for at least one included sheet.'
+    if (preview && !preview.can_import) {
+      const errorIssues = preview.issues.filter((issue) => issue.level === 'error')
+      if (errorIssues.length) {
+        const first = errorIssues[0]
+        return `${first.sheet}${first.row ? ` row ${first.row}` : ''}: ${first.message}`
+      }
+      if (!preview.ready_count) return 'No rows are ready to import. Check header row and column mapping.'
+    }
+    return ''
+  }, [includedConfigs.length, preview, titleMappingReady])
   const activeConfig = useMemo(
     () => configs.find((c) => c.sheet_name === activeSheet) ?? configs[0],
     [activeSheet, configs],
@@ -216,6 +233,28 @@ export default function ImportWizard({ catalogRows, uploadActive, onClose, onImp
     }
   }, [sessionId, step, activeConfigSnapshot])
 
+  const configsSnapshot = useMemo(() => JSON.stringify(configs), [configs])
+
+  useEffect(() => {
+    if (!sessionId || step === 'pick' || !titleMappingReady || !includedConfigs.length) return
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      void previewImport(sessionId, configs)
+        .then((result) => {
+          if (cancelled) return
+          setPreview(result)
+          if (result.can_import) setStep((current) => (current === 'map' ? 'review' : current))
+        })
+        .catch((err) => {
+          if (!cancelled) setError(formatFetchError(err))
+        })
+    }, 700)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [sessionId, step, configsSnapshot, titleMappingReady, includedConfigs.length])
+
   async function handleCommit() {
     if (!sessionId) return
     setBusy(true)
@@ -225,12 +264,16 @@ export default function ImportWizard({ catalogRows, uploadActive, onClose, onImp
         const result = await previewImport(sessionId, configs)
         setPreview(result)
         if (!result.can_import) {
-          setError('Fix mapping errors before importing.')
+          const errorIssues = result.issues.filter((issue) => issue.level === 'error')
+          const detail = errorIssues[0]
+            ? `${errorIssues[0].sheet}${errorIssues[0].row ? ` row ${errorIssues[0].row}` : ''}: ${errorIssues[0].message}`
+            : 'Fix mapping errors before importing.'
+          setError(detail)
           setStep('review')
           return
         }
       } else if (!preview.can_import) {
-        setError('Fix mapping errors before importing.')
+        setError(importBlockers || 'Fix mapping errors before importing.')
         return
       }
       const result = await commitImport(sessionId, configs)
@@ -614,7 +657,7 @@ export default function ImportWizard({ catalogRows, uploadActive, onClose, onImp
         <button
           className="ghost-action"
           type="button"
-          disabled={busy || !includedConfigs.length}
+          disabled={busy || !includedConfigs.length || !titleMappingReady}
           onClick={() => void refreshPreview()}
         >
           {busy ? 'Working...' : 'Preview import'}
@@ -622,12 +665,13 @@ export default function ImportWizard({ catalogRows, uploadActive, onClose, onImp
         <button
           className="primary-action card-action"
           type="button"
-          disabled={busy || !includedConfigs.length || !(preview?.can_import ?? false)}
+          disabled={busy || !includedConfigs.length || !titleMappingReady}
           onClick={() => void handleCommit()}
         >
           {busy ? 'Importing...' : `Import ${(preview?.ready_count ?? '…').toLocaleString()} rows`}
         </button>
       </div>
+      {importBlockers && !busy ? <p className="muted import-blocker-hint">{importBlockers}</p> : null}
     </div>
   )
 }

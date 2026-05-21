@@ -1170,6 +1170,11 @@
   align-items: center;
 }
 
+.import-blocker-hint {
+  margin: 8px 0 0;
+  font-size: 0.82rem;
+}
+
 .ghost-action {
   min-height: 44px;
   padding: 0 16px;
@@ -1188,6 +1193,12 @@
 
 .ghost-action:disabled {
   opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.primary-action:disabled,
+.card-action:disabled {
+  opacity: 0.55;
   cursor: not-allowed;
 }
 

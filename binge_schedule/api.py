@@ -106,10 +106,13 @@ class UpdateShowRowsPayload(BaseModel):
 class ImportPreviewSheetConfig(BaseModel):
     sheet_name: str
     include: bool = True
-    header_row: int = Field(default=1, ge=1, le=50)
+    header_row: int = Field(default=1, ge=0, le=50)
     row_kind: str = "auto"
     default_series_title: str = ""
     mapping: dict[str, str] = Field(default_factory=dict)
+    layout: str = "header"
+    data_start_row: int = Field(default=1, ge=1)
+    inferred_column_names: list[str] = Field(default_factory=list)
 
 
 class ImportPreviewPayload(BaseModel):
@@ -125,7 +128,7 @@ class ImportCommitPayload(BaseModel):
 class ImportSheetAnalyzePayload(BaseModel):
     session_id: str
     sheet_name: str
-    header_row: int = Field(default=1, ge=1, le=50)
+    header_row: int = Field(default=1, ge=0, le=50)
 
 
 class ImportSampleRowsPayload(BaseModel):
