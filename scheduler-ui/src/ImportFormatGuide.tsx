@@ -38,7 +38,7 @@ export default function ImportFormatGuide() {
               <strong>TRT</strong> or <strong>Runtime</strong> — content length without commercials (<code>0:47:03</code>, <code>28:30</code>, or minutes)
             </li>
             <li>
-              <strong>Slot</strong> — grid block size for series and paid programming only: <code>30</code>, <code>60</code>, or <code>120</code>. TRT is actual length; Slot is on-air window with commercials. Leave blank to infer from TRT. Movies ignore this column.
+              <strong>Slot</strong> — grid block size for series and paid programming only: <code>30</code>, <code>60</code>, or <code>120</code> (plain numbers are best). Time values like <code>0:30:00</code>, <code>1:00:00</code>, <code>2:00:00</code>, or <code>30:00</code> also work. TRT is actual length; Slot is on-air window with commercials. Leave blank to infer from TRT. Movies ignore this column.
             </li>
             <li>
               <strong>Synopsis</strong> or <strong>Description</strong> — episode or movie summary

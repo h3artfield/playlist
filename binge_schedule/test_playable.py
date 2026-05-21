@@ -189,6 +189,8 @@ def test_imported_series_with_trt_snaps_binge_row_minutes():
 
 
 def test_parse_slot_minutes_cell_accepts_grid_values_only():
+    import pandas as pd
+
     from binge_schedule.content_import import parse_slot_minutes_cell
 
     assert parse_slot_minutes_cell(30) == 30
@@ -196,6 +198,12 @@ def test_parse_slot_minutes_cell_accepts_grid_values_only():
     assert parse_slot_minutes_cell(120) == 120
     assert parse_slot_minutes_cell(90) is None
     assert parse_slot_minutes_cell("") is None
+    assert parse_slot_minutes_cell("30:00") == 30
+    assert parse_slot_minutes_cell("30:00:00") == 30
+    assert parse_slot_minutes_cell("1:00:00") == 60
+    assert parse_slot_minutes_cell("2:00:00") == 120
+    assert parse_slot_minutes_cell("0:30:00") == 30
+    assert parse_slot_minutes_cell(pd.Timedelta(minutes=60)) == 60
 
 
 def test_imported_series_uses_slot_column_over_trt_inference():

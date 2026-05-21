@@ -64,6 +64,20 @@ PLAYABLE_BLANK_VALUES = frozenset({"", "nan", "none", "null", "nat", "-", "n/a",
 VALID_SLOT_MINUTES = frozenset({30, 60, 120})
 
 
+def _slot_minutes_from_time_parts(hours: int, minutes: int, seconds: int) -> Optional[int]:
+    if seconds not in (0,):
+        total = hours * 60 + minutes + (1 if seconds >= 30 else 0)
+        return total if total in VALID_SLOT_MINUTES else None
+    if hours in VALID_SLOT_MINUTES and minutes == 0:
+        return hours
+    if hours in {1, 2} and minutes == 0:
+        return hours * 60
+    if hours == 0 and minutes in VALID_SLOT_MINUTES:
+        return minutes
+    total = hours * 60 + minutes
+    return total if total in VALID_SLOT_MINUTES else None
+
+
 def parse_slot_minutes_cell(value: Any) -> Optional[int]:
     """Return 30, 60, or 120 for explicit grid slot values; blank/invalid = None."""
     if value is None:
@@ -74,11 +88,36 @@ def parse_slot_minutes_cell(value: Any) -> Optional[int]:
     except Exception:
         pass
     if isinstance(value, (int, float)) and not pd.isna(value):
-        minutes = int(round(float(value)))
+        fv = float(value)
+        if fv in VALID_SLOT_MINUTES:
+            return int(fv)
+        if 0 < fv < 1:
+            minutes = int(round(fv * 24 * 60))
+            return minutes if minutes in VALID_SLOT_MINUTES else None
+        minutes = int(round(fv))
+        return minutes if minutes in VALID_SLOT_MINUTES else None
+    if hasattr(value, "total_seconds"):
+        try:
+            minutes = int(round(float(value.total_seconds()) / 60.0))
+        except Exception:
+            return None
         return minutes if minutes in VALID_SLOT_MINUTES else None
     text = " ".join(str(value).strip().split())
     if not text or text.lower() in PLAYABLE_BLANK_VALUES:
         return None
+    if ":" in text:
+        parts = text.split(":")
+        try:
+            nums = [int(float(part)) for part in parts]
+        except ValueError:
+            return None
+        if len(nums) == 3:
+            return _slot_minutes_from_time_parts(nums[0], nums[1], nums[2])
+        if len(nums) == 2:
+            hours, minutes = nums
+            if hours in VALID_SLOT_MINUTES and minutes == 0:
+                return hours
+            return _slot_minutes_from_time_parts(hours, minutes, 0)
     try:
         minutes = int(round(float(text)))
     except ValueError:
