@@ -186,7 +186,7 @@ def load_build_config(path: str | Path) -> BuildConfig:
         reference_binge_sheet = str(rsh).strip()
     return BuildConfig(
         gracenote_binge_id=int(raw.get("gracenote_binge_id", 0)),
-        nikki_workbook=raw["nikki_workbook"],
+        nikki_workbook=str(raw.get("nikki_workbook", "") or ""),
         shows=shows,
         weeks=weeks,
         timezone_note=str(raw.get("timezone_note", "local")),

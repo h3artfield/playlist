@@ -279,3 +279,13 @@ def test_imported_movies_ignore_slot_column():
     )
     assert rows[0]["runtime_minutes"] == 90
     assert rows[0]["binge_row_minutes"] == 90
+
+
+def test_load_desktop_config_without_nikki_workbook():
+    from pathlib import Path
+
+    from binge_schedule.config_io import load_build_config
+
+    cfg = load_build_config(Path("config/desktop.yaml"))
+    assert cfg.nikki_workbook == ""
+    assert cfg.shows == {}
