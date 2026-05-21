@@ -9,7 +9,13 @@ from typing import Any, Literal, Optional
 
 import pandas as pd
 
-from binge_schedule.content_import import import_content_rows, import_row_identity_key, parse_playable_cell, parse_slot_minutes_cell
+from binge_schedule.content_import import (
+    import_content_rows,
+    import_row_identity_key,
+    parse_playable_cell,
+    parse_slot_minutes_cell,
+    _runtime_minutes_from_cell,
+)
 
 MatchQuality = Literal["exact", "likely", "manual", "unmapped", "inferred"]
 RowKind = Literal["auto", "series", "movie"]
@@ -666,46 +672,6 @@ def parse_session_response(session_id: str) -> dict[str, Any]:
         "fields": CANONICAL_FIELDS,
         "sheets": sheets_out,
     }
-
-
-def _runtime_minutes_from_cell(value: Any) -> Optional[int]:
-    if value is None:
-        return None
-    try:
-        if pd.isna(value):
-            return None
-    except Exception:
-        pass
-    if isinstance(value, (int, float)):
-        fv = float(value)
-        if 0 < fv < 1:
-            return max(1, int(round(fv * 24 * 60)))
-        return max(1, int(round(fv)))
-    if hasattr(value, "total_seconds"):
-        try:
-            return max(1, int(round(float(value.total_seconds()) / 60.0)))
-        except Exception:
-            return None
-    text = str(value).strip()
-    if not text:
-        return None
-    if ":" in text:
-        parts = text.split(":")
-        try:
-            nums = [int(float(part)) for part in parts]
-        except ValueError:
-            return None
-        if len(nums) == 3:
-            return max(1, nums[0] * 60 + nums[1])
-        if len(nums) == 2:
-            a, b = nums
-            if a >= 10:
-                return max(1, int(round(a + b / 60)))
-            return max(1, int(round(a * 60 + b)))
-    try:
-        return max(1, int(round(float(text))))
-    except ValueError:
-        return None
 
 
 def rows_from_sheet(

@@ -268,6 +268,15 @@ def merge_import_rows(existing: list[dict[str, Any]], incoming: list[dict[str, A
     return dedupe_import_rows(out)
 
 
+def _runtime_parts_to_minutes(hours: int, minutes: int, seconds: int = 0, *, two_part: bool = False) -> int:
+    """Parse TRT from Excel time or MM:SS / H:MM:SS values."""
+    if two_part:
+        if hours >= 10 and minutes < 60:
+            return max(1, int(round(hours + minutes / 60.0 + seconds / 3600.0)))
+        return max(1, int(round(hours * 60 + minutes + seconds / 60.0)))
+    return max(1, hours * 60 + minutes)
+
+
 def _runtime_minutes_from_cell(value: Any) -> Optional[int]:
     if value is None:
         return None
@@ -281,11 +290,28 @@ def _runtime_minutes_from_cell(value: Any) -> Optional[int]:
         if 0 < fv < 1:
             return max(1, int(round(fv * 24 * 60)))
         return max(1, int(round(fv)))
+    if hasattr(value, "hour") and hasattr(value, "minute"):
+        try:
+            hours = int(value.hour)
+            minutes = int(value.minute)
+            seconds = int(getattr(value, "second", 0) or 0)
+            if hours >= 10 and minutes < 60:
+                return _runtime_parts_to_minutes(hours, minutes, seconds, two_part=True)
+            return _runtime_parts_to_minutes(hours, minutes, seconds)
+        except Exception:
+            pass
     if hasattr(value, "total_seconds"):
         try:
-            return max(1, int(round(float(value.total_seconds()) / 60.0)))
+            total_secs = int(round(float(value.total_seconds())))
         except Exception:
             return None
+        if total_secs < 0:
+            return None
+        hours, rem = divmod(total_secs, 3600)
+        minutes, seconds = divmod(rem, 60)
+        if hours >= 10 and minutes < 60:
+            return _runtime_parts_to_minutes(hours, minutes, seconds, two_part=True)
+        return _runtime_parts_to_minutes(hours, minutes, seconds)
     text = str(value).strip()
     if not text:
         return None
@@ -296,9 +322,9 @@ def _runtime_minutes_from_cell(value: Any) -> Optional[int]:
         except ValueError:
             return None
         if len(nums) == 3:
-            return max(1, nums[0] * 60 + nums[1])
+            return _runtime_parts_to_minutes(nums[0], nums[1], nums[2])
         if len(nums) == 2:
-            return max(1, nums[0])
+            return _runtime_parts_to_minutes(nums[0], nums[1], 0, two_part=True)
     try:
         return max(1, int(round(float(text))))
     except ValueError:

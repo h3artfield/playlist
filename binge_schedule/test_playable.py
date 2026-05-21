@@ -110,6 +110,18 @@ def test_nikki_load_movies_accepts_year_original_airdate_header():
     assert episodes[1].title == "Beta Movie (2001)"
 
 
+def test_runtime_minutes_from_cell_parses_excel_trt_mm_ss():
+    from datetime import time
+
+    from binge_schedule.content_import import _runtime_minutes_from_cell
+
+    assert _runtime_minutes_from_cell("21:20") == 21
+    assert _runtime_minutes_from_cell(time(21, 20, 0)) == 21
+    assert _runtime_minutes_from_cell(time(0, 21, 20)) == 21
+    assert _runtime_minutes_from_cell("0:52:35") == 52
+    assert _runtime_minutes_from_cell(time(0, 52, 35)) == 52
+
+
 def test_import_wizard_movies_mapping_does_not_duplicate_title_as_series():
     from binge_schedule.content_import_wizard import analyze_sheet
 
