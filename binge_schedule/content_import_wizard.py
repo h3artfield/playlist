@@ -9,7 +9,7 @@ from typing import Any, Literal, Optional
 
 import pandas as pd
 
-from binge_schedule.content_import import import_content_rows, import_row_identity_key
+from binge_schedule.content_import import import_content_rows, import_row_identity_key, parse_playable_cell
 
 MatchQuality = Literal["exact", "likely", "manual", "unmapped", "inferred"]
 RowKind = Literal["auto", "series", "movie"]
@@ -18,6 +18,7 @@ CANONICAL_FIELDS: list[dict[str, Any]] = [
     {"key": "title", "label": "Episode or movie title", "required": True},
     {"key": "series_title", "label": "Series / show", "required": False},
     {"key": "episode_number", "label": "Episode number", "required": False},
+    {"key": "playable", "label": "Playable (Yes/No)", "required": False},
     {"key": "runtime", "label": "Runtime", "required": False},
     {"key": "genre", "label": "Genre", "required": False},
     {"key": "original_airdate", "label": "Original airdate / year", "required": False},
@@ -93,6 +94,16 @@ IMPORT_ALIASES: dict[str, set[str]] = {
         "category",
     },
     "copyright": {"copyright"},
+    "playable": {
+        "playable",
+        "cleared to air",
+        "can air",
+        "approved to air",
+        "air ok",
+        "schedule",
+        "cleared",
+        "approved",
+    },
     "content_type": {
         "content type",
         "type",
@@ -121,6 +132,7 @@ INFERRED_COLUMN_LABELS: dict[str, str] = {
     "genre": "Genre",
     "content_type": "Content Type",
     "copyright": "Copyright",
+    "playable": "Playable",
 }
 
 
@@ -764,6 +776,12 @@ def rows_from_sheet(
         except Exception:
             air_iso = _clean_text(air_raw)
 
+        playable_col = mapping.get("playable", "")
+        if playable_col:
+            playable = parse_playable_cell(cell(record, "playable"))
+        else:
+            playable = True
+
         rows.append(
             {
                 "content_type": "series" if is_series else "movie",
@@ -777,6 +795,7 @@ def rows_from_sheet(
                 "copyright": _clean_text(cell(record, "copyright")),
                 "synopsis_short": _clean_text(cell(record, "synopsis_short")),
                 "synopsis_long": _clean_text(cell(record, "synopsis_long")),
+                "playable": playable,
                 "source_sheet": sheet_name,
                 "source_file": source_name,
             }

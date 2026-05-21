@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Optional
 
 import pandas as pd
 
+from binge_schedule.content_import import find_playable_header_index, parse_playable_cell
 from binge_schedule.models import Episode, NikkiColumnHeaders
 
 if TYPE_CHECKING:
@@ -68,6 +69,13 @@ def _find_header_row_and_columns(
             lk = _norm_header(headers.synopsis)
             if lk in hm:
                 idx["synopsis"] = hm[lk]
+        playable_idx = find_playable_header_index(hm)
+        if playable_idx is not None:
+            idx["playable"] = playable_idx
+        elif headers.playable:
+            lk = _norm_header(headers.playable)
+            if lk in hm:
+                idx["playable"] = hm[lk]
         return i, idx
     return None, {}
 
@@ -151,9 +159,14 @@ def load_movies(
         return []
     title_col = col_idx["episode"]
     year_col = col_idx.get("year")
+    playable_col = col_idx.get("playable")
     start = hr + 1
     out: list[Episode] = []
     for i in range(start, len(df)):
+        if playable_col is not None:
+            cell_val = df.iloc[i, playable_col] if playable_col < len(df.columns) else None
+            if not parse_playable_cell(cell_val):
+                continue
         tcell = df.iloc[i, title_col]
         if pd.isna(tcell):
             continue
@@ -434,10 +447,11 @@ def load_standard_sheet(
         return []
     ep_col = col_idx["episode"]
     se_col = col_idx.get("season_episode")
+    playable_col = col_idx.get("playable")
     start = hr + 1
     green_rows: Optional[set[int]] = None
     red_text_rows: Optional[set[int]] = None
-    if row_filter == ROW_FILTER_GREEN_EPISODE_CELL:
+    if playable_col is None and row_filter == ROW_FILTER_GREEN_EPISODE_CELL:
         if workbook_path and sheet_name:
             green_rows = _green_episode_row_indices(
                 workbook_path,
@@ -448,7 +462,7 @@ def load_standard_sheet(
             )
         else:
             green_rows = set()
-    elif row_filter == ROW_FILTER_EXCLUDE_RED_EPISODE_TEXT:
+    elif playable_col is None and row_filter == ROW_FILTER_EXCLUDE_RED_EPISODE_TEXT:
         if workbook_path and sheet_name:
             red_text_rows = _red_episode_text_row_indices(
                 workbook_path,
@@ -463,9 +477,13 @@ def load_standard_sheet(
     for i in range(start, len(df)):
         if _skip_instruction_row(df, i, hr, col_idx):
             continue
-        if green_rows is not None and i not in green_rows:
+        if playable_col is not None:
+            cell_val = df.iloc[i, playable_col] if playable_col < len(df.columns) else None
+            if not parse_playable_cell(cell_val):
+                continue
+        elif green_rows is not None and i not in green_rows:
             continue
-        if red_text_rows is not None and i in red_text_rows:
+        elif red_text_rows is not None and i in red_text_rows:
             continue
         cell = df.iloc[i, ep_col]
         if pd.isna(cell):
@@ -605,6 +623,9 @@ def load_sheet(
     """Load episodes from the content workbook.
 
     ``row_filter`` (optional, from YAML ``nikki_row_filter``):
+
+    When a **Playable** column exists on the sheet, only rows with an explicit yes-like
+    value are loaded (blank = no). Otherwise:
 
     - ``green_episode_cell`` — only rows whose **Episode** column cell has the sheet’s
       green fill (e.g. Carol Burnett “play only green” rule). Requires ``path`` /

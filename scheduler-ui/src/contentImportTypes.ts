@@ -64,6 +64,7 @@ export type PreviewRow = {
   episode_title?: string
   runtime_minutes?: number | null
   genre?: string
+  playable?: boolean
   source_sheet?: string
   catalog_match?: CatalogMatchKind
   catalog_match_label?: string

@@ -41,7 +41,71 @@ IMPORT_ALIASES: dict[str, set[str]] = {
     "synopsis_short": {"synopsis short", "short synopsis", "short description"},
     "synopsis_long": {"synopsis long", "long synopsis", "description"},
     "copyright": {"copyright", "rights"},
+    "playable": {
+        "playable",
+        "cleared to air",
+        "can air",
+        "approved to air",
+        "air ok",
+        "schedule",
+        "cleared",
+        "approved",
+    },
 }
+
+
+PLAYABLE_YES_VALUES = frozenset(
+    {"yes", "y", "true", "1", "x", "playable", "cleared", "ok", "available", "approved"}
+)
+PLAYABLE_NO_VALUES = frozenset(
+    {"no", "n", "false", "0", "hold", "blocked", "unavailable", "not available", "do not air", "hold back"}
+)
+PLAYABLE_BLANK_VALUES = frozenset({"", "nan", "none", "null", "nat", "-", "n/a", "na", "tbd", "pending"})
+
+
+def parse_playable_cell(value: Any) -> bool:
+    """Return True only for explicit yes-like values. Blank or unknown = False."""
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except Exception:
+        pass
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not pd.isna(value):
+        if int(value) == 1:
+            return True
+        if int(value) == 0:
+            return False
+    text = " ".join(str(value).strip().lower().split())
+    if text in PLAYABLE_BLANK_VALUES:
+        return False
+    if text in PLAYABLE_YES_VALUES:
+        return True
+    if text in PLAYABLE_NO_VALUES:
+        return False
+    return False
+
+
+def imported_row_is_playable(row: dict[str, Any]) -> bool:
+    """Legacy imported rows without ``playable`` stay schedulable; explicit False is not."""
+    if "playable" not in row:
+        return True
+    value = row.get("playable")
+    if isinstance(value, bool):
+        return value
+    return parse_playable_cell(value)
+
+
+def find_playable_header_index(header_map: dict[str, int]) -> int | None:
+    playable_aliases = IMPORT_ALIASES["playable"]
+    for alias in playable_aliases:
+        idx = header_map.get(alias)
+        if idx is not None:
+            return idx
+    return None
 
 
 def imported_catalog_path(cfg: BuildConfig) -> Path:
@@ -216,6 +280,11 @@ def rows_from_dataframe(df: pd.DataFrame, *, sheet_name: str, source_name: str) 
                 air_iso = pd.to_datetime(air_raw).date().isoformat()
         except Exception:
             air_iso = _clean_text(air_raw)
+        playable_col = col_map.get("playable")
+        if playable_col:
+            playable = parse_playable_cell(record.get(playable_col, None))
+        else:
+            playable = True
         out.append(
             {
                 "content_type": "series" if is_series else "movie",
@@ -229,6 +298,7 @@ def rows_from_dataframe(df: pd.DataFrame, *, sheet_name: str, source_name: str) 
                 "copyright": _clean_text(record.get(col_map.get("copyright", ""), "")),
                 "synopsis_short": _clean_text(record.get(col_map.get("synopsis_short", ""), "")),
                 "synopsis_long": _clean_text(record.get(col_map.get("synopsis_long", ""), "")),
+                "playable": playable,
                 "source_sheet": sheet_name,
                 "source_file": source_name,
             }

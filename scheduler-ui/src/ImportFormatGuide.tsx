@@ -47,6 +47,9 @@ export default function ImportFormatGuide() {
               <strong>Genre</strong> — primary genre
             </li>
             <li>
+              <strong>Playable</strong> — <code>Yes</code> or <code>No</code>. Only <strong>Yes</strong> rows are used when building the on-air schedule. Leave blank = <strong>No</strong>. Keep every episode in the file; use this column instead of row colors or “do not play” notes.
+            </li>
+            <li>
               <strong>Stars</strong> — cast (stored with the row; not required for import)
             </li>
             <li>
@@ -60,8 +63,10 @@ export default function ImportFormatGuide() {
         <h4>Important</h4>
         <ul>
           <li>
-            <strong>Only include episodes and movies you plan to air.</strong> Do not list unaired, cut, or inventory-only titles — every row in the file is treated as available content.
+            <strong>Use the Playable column</strong> to control what can go on air. Every row stays in the catalog for inventory; only <strong>Yes</strong> rows are scheduled. Blank Playable = <strong>No</strong>.
           </li>
+          <li>If the first <strong>Yes</strong> for a show is episode 6, scheduling starts at episode 6 — earlier rows remain in the file but are skipped.</li>
+          <li>Do not rely on row colors or notes like “only play green” — map a <strong>Playable</strong> column instead.</li>
           <li>Put <strong>column headings on a single header row</strong> (e.g. Episode, Season/Episode, TRT, Synopsis). If a tab has no headings, we can try to infer columns from the data, but labeled columns work best.</li>
           <li>Use <strong>one worksheet per series</strong> when you can (e.g. a tab named <em>Stingray</em> with only Stingray episodes).</li>
           <li>Skip blank separator rows and notes-only rows inside the episode table.</li>

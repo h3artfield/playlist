@@ -53,10 +53,15 @@ if (Test-Path "$Root\scheduler-ui\package.json") {
     throw "scheduler-ui/package.json not found; cannot build desktop app."
 }
 
-if (Test-Path "$Root\config\april_2026.yaml") {
-    Write-Host "Writing content-catalog.json into scheduler-ui/dist for desktop bundle..."
-    python -m binge_schedule.cli catalog -c "$Root\config\april_2026.yaml" -o "$Root\scheduler-ui\dist\content-catalog.json"
+Write-Host "Writing empty content-catalog.json (fresh import after install)..."
+$emptyCatalog = @'
+{
+  "schema_version": 1,
+  "row_count": 0,
+  "rows": []
 }
+'@
+$emptyCatalog | Set-Content -Encoding utf8 "$Root\scheduler-ui\dist\content-catalog.json"
 
 $args = @(
     "--noconfirm",

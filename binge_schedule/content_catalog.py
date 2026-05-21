@@ -122,6 +122,7 @@ def _base_row(
         "copyright": "",
         "availability_status": "available",
         "exclude_reason": "",
+        "playable": True,
         "source_file": source_file,
         "source_sheet": source_sheet,
         "source_row": None,
@@ -725,6 +726,8 @@ def canonical_rows_from_imported_rows(
     station_id: str,
 ) -> list[dict[str, Any]]:
     """Normalize uploaded-content rows into the same schema as YAML/Nikki content."""
+    from binge_schedule.content_import import imported_row_is_playable
+
     rows: list[dict[str, Any]] = []
     for idx0, src in enumerate(imported_rows):
         content_type = _content_type_from_imported(src.get("content_type", "series"))
@@ -754,6 +757,7 @@ def canonical_rows_from_imported_rows(
             nikki_row_filter="",
         )
         token = ep_num or ep_title or display
+        playable = imported_row_is_playable(src)
         row.update(
             {
                 "episode_key": f"{series_key}:{_slug(token, fallback=f'row-{idx0 + 1}')}",
@@ -765,6 +769,9 @@ def canonical_rows_from_imported_rows(
                 "original_airdate": _clean_text(src.get("original_airdate")),
                 "production_company": _clean_text(src.get("production_company")),
                 "copyright": _clean_text(src.get("copyright")),
+                "playable": playable,
+                "availability_status": "available" if playable else "not_playable",
+                "exclude_reason": "" if playable else "playable_no",
                 "source_row": idx0 + 1,
                 "raw_title": ep_title or display,
             }

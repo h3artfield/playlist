@@ -19,6 +19,7 @@ class NikkiColumnHeaders:
     year: Optional[str] = None
     stars: Optional[str] = "Stars"
     synopsis: Optional[str] = "Synopsis"
+    playable: Optional[str] = "Playable"
 
     @classmethod
     def standard_series(cls) -> NikkiColumnHeaders:

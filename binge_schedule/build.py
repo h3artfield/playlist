@@ -181,8 +181,8 @@ def _explicit_episode_for_cell(cat: Catalog, series_key: str, cell: str, display
 def build_catalog(cfg: BuildConfig) -> Catalog:
     """Load each series’ episode list from the content workbook.
 
-    Respects per-show ``nikki_row_filter`` (e.g. ``green_episode_cell`` for Carol Burnett): only those
-    rows exist in ``cat.by_show``, so scheduling never pulls a disallowed episode.
+    Respects per-show ``nikki_row_filter`` (legacy green/red rules) and **Playable** columns:
+    only yes-like rows exist in ``cat.by_show``, so scheduling never pulls a disallowed episode.
     """
     cat = Catalog()
     wb_path = str(resolved_nikki_workbook_path(cfg))

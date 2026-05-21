@@ -1088,6 +1088,8 @@ def _catalog_episodes_by_show() -> dict[str, list[dict[str, Any]]]:
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
             continue
+        if row.get("playable") is False:
+            continue
         if row.get("availability_status") and row.get("availability_status") not in {"available", "metadata_only"}:
             continue
         content_type = _frontend_content_type(str(row.get("content_type") or ""))
