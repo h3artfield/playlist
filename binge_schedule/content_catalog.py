@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
+import yaml
 
 from binge_schedule import nikki
 from binge_schedule.archive_normalize import season_episode_parts
@@ -720,6 +722,115 @@ def _content_type_from_imported(value: Any) -> str:
     return "series"
 
 
+def _compact_lookup_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", _clean_text(text).casefold())
+
+
+def _snap_binge_row_minutes(minutes: float) -> int:
+    """Map typical TRT to grid slot size (30 / 60 / 120).
+
+    Half-hour blocks (including ~28:30 paid programming) use a 30-minute slot.
+    Hour-series content (TRT below 60 min, with commercials in the hour) uses 60.
+    TRT of 60 minutes or more cannot fit a 60-minute window — use a 120-minute block.
+    """
+    if minutes <= 29:
+        return 30
+    if minutes < 60:
+        return 60
+    return 120
+
+
+@lru_cache(maxsize=1)
+def _binge_row_minutes_lookup() -> dict[str, int]:
+    lookup: dict[str, int] = {}
+    config_dir = Path(__file__).resolve().parents[1] / "config"
+    if not config_dir.is_dir():
+        return lookup
+    for path in sorted(config_dir.glob("*.yaml")):
+        try:
+            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        shows = (raw or {}).get("shows") or {}
+        if not isinstance(shows, dict):
+            continue
+        for show_data in shows.values():
+            if not isinstance(show_data, dict):
+                continue
+            raw_binge = show_data.get("binge_row_minutes")
+            if raw_binge is None:
+                continue
+            try:
+                binge = int(raw_binge)
+            except (TypeError, ValueError):
+                continue
+            if binge not in (30, 60, 120):
+                continue
+            for label in (show_data.get("display_name"), show_data.get("nikki_sheet")):
+                key = _clean_text(label).casefold()
+                if key:
+                    lookup[key] = binge
+    return lookup
+
+
+def _lookup_binge_row_minutes(*names: str) -> Optional[int]:
+    lookup = _binge_row_minutes_lookup()
+    for name in names:
+        key = _clean_text(name).casefold()
+        if key in lookup:
+            return lookup[key]
+        compact = _compact_lookup_key(name)
+        if len(compact) < 4:
+            continue
+        for candidate, binge in lookup.items():
+            candidate_compact = _compact_lookup_key(candidate)
+            if compact == candidate_compact or compact in candidate_compact or candidate_compact in compact:
+                return binge
+    return None
+
+
+def _infer_sheet_binge_row_minutes(
+    *,
+    sheet_name: str,
+    display_name: str,
+    runtimes: list[int],
+) -> int:
+    if runtimes:
+        median = sorted(runtimes)[len(runtimes) // 2]
+        return _snap_binge_row_minutes(median)
+    configured = _lookup_binge_row_minutes(display_name, sheet_name)
+    if configured is not None:
+        return configured
+    return 30
+
+
+def _resolve_binge_row_minutes(
+    *,
+    content_type: str,
+    slot_minutes: Any,
+    runtime_minutes: Optional[int],
+    sheet: str,
+    sheet_binge: dict[str, int],
+) -> int:
+    from binge_schedule.content_import import VALID_SLOT_MINUTES
+
+    if content_type == "movie":
+        return runtime_minutes if runtime_minutes is not None else 120
+    parsed_slot = None
+    if slot_minutes not in (None, ""):
+        try:
+            candidate = int(slot_minutes)
+        except (TypeError, ValueError):
+            candidate = None
+        if candidate in VALID_SLOT_MINUTES:
+            parsed_slot = candidate
+    if parsed_slot is not None:
+        return parsed_slot
+    if runtime_minutes is not None:
+        return _snap_binge_row_minutes(runtime_minutes)
+    return sheet_binge.get(sheet, 30)
+
+
 def canonical_rows_from_imported_rows(
     imported_rows: list[dict[str, Any]],
     *,
@@ -727,6 +838,29 @@ def canonical_rows_from_imported_rows(
 ) -> list[dict[str, Any]]:
     """Normalize uploaded-content rows into the same schema as YAML/Nikki content."""
     from binge_schedule.content_import import imported_row_is_playable
+
+    sheet_runtimes: dict[str, list[int]] = {}
+    sheet_display: dict[str, str] = {}
+    for src in imported_rows:
+        sheet = _clean_text(src.get("source_sheet"))
+        display = _clean_text(src.get("display_name")) or _clean_text(src.get("series_title"))
+        if sheet and display and sheet not in sheet_display:
+            sheet_display[sheet] = display
+        runtime = src.get("runtime_minutes")
+        try:
+            runtime_minutes = int(runtime) if runtime not in (None, "") else None
+        except (TypeError, ValueError):
+            runtime_minutes = None
+        if sheet and runtime_minutes:
+            sheet_runtimes.setdefault(sheet, []).append(runtime_minutes)
+
+    sheet_binge: dict[str, int] = {}
+    for sheet in set(sheet_display) | set(sheet_runtimes):
+        sheet_binge[sheet] = _infer_sheet_binge_row_minutes(
+            sheet_name=sheet,
+            display_name=sheet_display.get(sheet, sheet),
+            runtimes=sheet_runtimes.get(sheet, []),
+        )
 
     rows: list[dict[str, Any]] = []
     for idx0, src in enumerate(imported_rows):
@@ -742,20 +876,34 @@ def canonical_rows_from_imported_rows(
             runtime_minutes = int(runtime) if runtime not in (None, "") else None
         except (TypeError, ValueError):
             runtime_minutes = None
+        sheet = _clean_text(src.get("source_sheet"))
+        if content_type == "movie":
+            effective_runtime = runtime_minutes if runtime_minutes is not None else 120
+            binge_minutes = effective_runtime
+        else:
+            binge_minutes = _resolve_binge_row_minutes(
+                content_type=content_type,
+                slot_minutes=src.get("slot_minutes"),
+                runtime_minutes=runtime_minutes,
+                sheet=sheet,
+                sheet_binge=sheet_binge,
+            )
+            effective_runtime = runtime_minutes if runtime_minutes is not None else binge_minutes
         row = _base_row(
             station_id=station_id,
             content_type=content_type,
             series_key=series_key,
             display_name=display,
-            runtime_minutes=runtime_minutes,
+            runtime_minutes=effective_runtime,
             genre=_clean_text(src.get("genre")).casefold(),
             semantic_group=_clean_text(src.get("genre")).casefold(),
             source_file=_clean_text(src.get("source_file")),
-            source_sheet=_clean_text(src.get("source_sheet")),
+            source_sheet=sheet,
             parser_style="uploaded_mapping",
             parser_rule="uploaded_content",
             nikki_row_filter="",
         )
+        row["binge_row_minutes"] = binge_minutes
         token = ep_num or ep_title or display
         playable = imported_row_is_playable(src)
         row.update(

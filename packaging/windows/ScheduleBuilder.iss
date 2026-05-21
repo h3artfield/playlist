@@ -1,5 +1,5 @@
 #define AppName "Schedule Builder"
-#define AppVersion "1.0.39"
+#define AppVersion "1.0.40"
 #define AppPublisher "Schedule Builder"
 #define AppExeName "ScheduleBuilder.exe"
 

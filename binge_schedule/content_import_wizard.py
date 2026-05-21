@@ -9,7 +9,7 @@ from typing import Any, Literal, Optional
 
 import pandas as pd
 
-from binge_schedule.content_import import import_content_rows, import_row_identity_key, parse_playable_cell
+from binge_schedule.content_import import import_content_rows, import_row_identity_key, parse_playable_cell, parse_slot_minutes_cell
 
 MatchQuality = Literal["exact", "likely", "manual", "unmapped", "inferred"]
 RowKind = Literal["auto", "series", "movie"]
@@ -19,7 +19,8 @@ CANONICAL_FIELDS: list[dict[str, Any]] = [
     {"key": "series_title", "label": "Series / show", "required": False},
     {"key": "episode_number", "label": "Episode number", "required": False},
     {"key": "playable", "label": "Playable (Yes/No)", "required": False},
-    {"key": "runtime", "label": "Runtime", "required": False},
+    {"key": "runtime", "label": "Runtime (TRT)", "required": False},
+    {"key": "slot", "label": "Grid slot (30/60/120)", "required": False},
     {"key": "genre", "label": "Genre", "required": False},
     {"key": "original_airdate", "label": "Original airdate / year", "required": False},
     {"key": "content_type", "label": "Content type", "required": False},
@@ -87,6 +88,13 @@ IMPORT_ALIASES: dict[str, set[str]] = {
         "run time",
         "run time (min)",
     },
+    "slot": {
+        "slot",
+        "grid slot",
+        "slot length",
+        "binge slot",
+        "block length",
+    },
     "genre": {
         "genre",
         "amazon channels genre",
@@ -126,6 +134,7 @@ INFERRED_COLUMN_LABELS: dict[str, str] = {
     "series_title": "Series",
     "episode_number": "Season/Episode",
     "runtime": "TRT",
+    "slot": "Slot",
     "synopsis_long": "Synopsis",
     "synopsis_short": "Short Synopsis",
     "original_airdate": "Year/Original Airdate",
@@ -798,6 +807,21 @@ def rows_from_sheet(
         else:
             playable = True
 
+        slot_minutes = None
+        is_movie_row = not is_series
+        if not is_movie_row:
+            slot_raw = cell(record, "slot")
+            slot_minutes = parse_slot_minutes_cell(slot_raw)
+            if slot_raw is not None and _clean_text(slot_raw) and slot_minutes is None:
+                issues.append(
+                    {
+                        "sheet": sheet_name,
+                        "row": excel_row,
+                        "level": "warning",
+                        "message": "Slot must be 30, 60, or 120 (series and paid programming only).",
+                    }
+                )
+
         rows.append(
             {
                 "content_type": "series" if is_series else "movie",
@@ -807,6 +831,7 @@ def rows_from_sheet(
                 "episode_title": title if is_series else "",
                 "genre": _clean_text(cell(record, "genre")).split(",")[0].strip().lower(),
                 "runtime_minutes": runtime,
+                "slot_minutes": slot_minutes,
                 "original_airdate": air_iso,
                 "copyright": _clean_text(cell(record, "copyright")),
                 "synopsis_short": _clean_text(cell(record, "synopsis_short")),

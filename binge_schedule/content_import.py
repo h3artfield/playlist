@@ -33,7 +33,8 @@ IMPORT_ALIASES: dict[str, set[str]] = {
         "ep #",
         "episode #",
     },
-    "runtime": {"runtime", "duration", "length", "run time", "run time (min)"},
+    "runtime": {"runtime", "duration", "length", "run time", "run time (min)", "trt"},
+    "slot": {"slot", "grid slot", "slot length", "binge slot", "block length"},
     "content_type": {"content type", "type", "category"},
     "genre": {"genre", "category"},
     "original_airdate": {"original airdate", "airdate", "year", "release date"},
@@ -60,6 +61,29 @@ PLAYABLE_NO_VALUES = frozenset(
     {"no", "n", "false", "0", "hold", "blocked", "unavailable", "not available", "do not air", "hold back"}
 )
 PLAYABLE_BLANK_VALUES = frozenset({"", "nan", "none", "null", "nat", "-", "n/a", "na", "tbd", "pending"})
+VALID_SLOT_MINUTES = frozenset({30, 60, 120})
+
+
+def parse_slot_minutes_cell(value: Any) -> Optional[int]:
+    """Return 30, 60, or 120 for explicit grid slot values; blank/invalid = None."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if isinstance(value, (int, float)) and not pd.isna(value):
+        minutes = int(round(float(value)))
+        return minutes if minutes in VALID_SLOT_MINUTES else None
+    text = " ".join(str(value).strip().split())
+    if not text or text.lower() in PLAYABLE_BLANK_VALUES:
+        return None
+    try:
+        minutes = int(round(float(text)))
+    except ValueError:
+        return None
+    return minutes if minutes in VALID_SLOT_MINUTES else None
 
 
 def parse_playable_cell(value: Any) -> bool:
@@ -272,6 +296,9 @@ def rows_from_dataframe(df: pd.DataFrame, *, sheet_name: str, source_name: str) 
         if not display:
             continue
         runtime = _runtime_minutes_from_cell(record.get(col_map.get("runtime", ""), None))
+        slot_minutes = None
+        if raw_type not in {"movie", "movies", "special", "specials", "film", "feature"}:
+            slot_minutes = parse_slot_minutes_cell(record.get(col_map.get("slot", ""), None))
         air_raw = record.get(col_map.get("original_airdate", ""), None)
         air_iso = ""
         try:
@@ -293,6 +320,7 @@ def rows_from_dataframe(df: pd.DataFrame, *, sheet_name: str, source_name: str) 
                 "episode_title": title if is_series else "",
                 "genre": _clean_text(record.get(col_map.get("genre", ""), "")).split(",")[0].strip().lower(),
                 "runtime_minutes": runtime,
+                "slot_minutes": slot_minutes,
                 "original_airdate": air_iso,
                 "copyright": _clean_text(record.get(col_map.get("copyright", ""), "")),
                 "synopsis_short": _clean_text(record.get(col_map.get("synopsis_short", ""), "")),

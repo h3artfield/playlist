@@ -124,3 +124,138 @@ def test_import_wizard_movies_mapping_does_not_duplicate_title_as_series():
     assert mapping["title"] == "Title"
     assert mapping.get("series_title", "") == ""
     assert analysis["suggested_row_kind"] == "movie"
+
+
+def test_imported_series_without_trt_uses_configured_binge_row_minutes():
+    from binge_schedule.content_catalog import canonical_rows_from_imported_rows
+
+    rows = canonical_rows_from_imported_rows(
+        [
+            {
+                "content_type": "series",
+                "display_name": "Hunter",
+                "series_title": "Hunter",
+                "episode_number": "01_01",
+                "episode_title": "Pilot",
+                "source_sheet": "Hunter",
+            }
+        ],
+        station_id="test",
+    )
+    assert len(rows) == 1
+    assert rows[0]["binge_row_minutes"] == 60
+    assert rows[0]["runtime_minutes"] == 60
+
+
+def test_imported_series_with_trt_snaps_binge_row_minutes():
+    from binge_schedule.content_catalog import _snap_binge_row_minutes, canonical_rows_from_imported_rows
+
+    assert _snap_binge_row_minutes(24) == 30
+    assert _snap_binge_row_minutes(28.5) == 30
+    assert _snap_binge_row_minutes(29) == 30
+    assert _snap_binge_row_minutes(30) == 60
+    assert _snap_binge_row_minutes(38) == 60
+    assert _snap_binge_row_minutes(52) == 60
+    assert _snap_binge_row_minutes(59) == 60
+    assert _snap_binge_row_minutes(60) == 120
+    assert _snap_binge_row_minutes(90) == 120
+
+    rows = canonical_rows_from_imported_rows(
+        [
+            {
+                "content_type": "series",
+                "display_name": "Laugh-In",
+                "series_title": "Laugh-In",
+                "episode_number": "01_01",
+                "episode_title": "Episode 1",
+                "runtime_minutes": 52,
+                "source_sheet": "Laugh In ",
+            },
+            {
+                "content_type": "series",
+                "display_name": "Laugh-In",
+                "series_title": "Laugh-In",
+                "episode_number": "01_02",
+                "episode_title": "Episode 2",
+                "runtime_minutes": 57,
+                "source_sheet": "Laugh In ",
+            },
+        ],
+        station_id="test",
+    )
+    assert rows[0]["runtime_minutes"] == 52
+    assert rows[0]["binge_row_minutes"] == 60
+    assert rows[1]["binge_row_minutes"] == 60
+
+
+def test_parse_slot_minutes_cell_accepts_grid_values_only():
+    from binge_schedule.content_import import parse_slot_minutes_cell
+
+    assert parse_slot_minutes_cell(30) == 30
+    assert parse_slot_minutes_cell("60") == 60
+    assert parse_slot_minutes_cell(120) == 120
+    assert parse_slot_minutes_cell(90) is None
+    assert parse_slot_minutes_cell("") is None
+
+
+def test_imported_series_uses_slot_column_over_trt_inference():
+    from binge_schedule.content_catalog import canonical_rows_from_imported_rows
+
+    rows = canonical_rows_from_imported_rows(
+        [
+            {
+                "content_type": "series",
+                "display_name": "Hunter",
+                "series_title": "Hunter",
+                "episode_number": "01_01",
+                "episode_title": "Pilot",
+                "runtime_minutes": 52,
+                "slot_minutes": 60,
+                "source_sheet": "Hunter",
+            }
+        ],
+        station_id="test",
+    )
+    assert rows[0]["runtime_minutes"] == 52
+    assert rows[0]["binge_row_minutes"] == 60
+
+
+def test_imported_paid_programming_slot_30_with_28_30_trt():
+    from binge_schedule.content_catalog import canonical_rows_from_imported_rows
+
+    rows = canonical_rows_from_imported_rows(
+        [
+            {
+                "content_type": "paid_programming",
+                "display_name": "Perry Stone",
+                "series_title": "Perry Stone",
+                "episode_title": "This Week",
+                "runtime_minutes": 29,
+                "slot_minutes": 30,
+                "source_sheet": "Perry Stone",
+            }
+        ],
+        station_id="test",
+    )
+    assert rows[0]["runtime_minutes"] == 29
+    assert rows[0]["binge_row_minutes"] == 30
+
+
+def test_imported_movies_ignore_slot_column():
+    from binge_schedule.content_catalog import canonical_rows_from_imported_rows
+
+    rows = canonical_rows_from_imported_rows(
+        [
+            {
+                "content_type": "movie",
+                "display_name": "Alpha Movie",
+                "episode_title": "Alpha Movie",
+                "runtime_minutes": 90,
+                "slot_minutes": 60,
+                "source_sheet": "MOVIES",
+            }
+        ],
+        station_id="test",
+    )
+    assert rows[0]["runtime_minutes"] == 90
+    assert rows[0]["binge_row_minutes"] == 90
