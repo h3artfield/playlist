@@ -649,7 +649,23 @@ def sample_rows_for_analysis(
         source_name=source_name,
         config=config,
     )
-    return rows[:limit]
+    return [_enrich_preview_row(row) for row in rows[:limit]]
+
+
+def sample_rows_for_config(session_id: str, raw_config: dict[str, Any], *, limit: int = 8) -> list[dict[str, Any]]:
+    session = get_import_session(session_id)
+    config = SheetImportConfig.from_dict(raw_config)
+    df_raw = session["sheets"].get(config.sheet_name)
+    if df_raw is None or not config.mapping.get("title"):
+        return []
+    norm = build_sheet_dataframe(df_raw, config)
+    rows, _ = rows_from_sheet(
+        norm,
+        sheet_name=config.sheet_name,
+        source_name=str(session["filename"]),
+        config=config,
+    )
+    return [_enrich_preview_row(row) for row in rows[:limit]]
 
 
 def parse_session_response(session_id: str) -> dict[str, Any]:
@@ -808,6 +824,28 @@ def rows_from_sheet(
             }
         )
     return rows, issues
+
+
+def _enrich_preview_row(row: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(row)
+    runtime = enriched.get("runtime_minutes")
+    if runtime is not None:
+        try:
+            enriched["runtime_minutes"] = int(runtime)
+        except (TypeError, ValueError):
+            pass
+    slot = enriched.get("slot_minutes")
+    if slot is not None:
+        try:
+            enriched["grid_slot_minutes"] = int(slot)
+        except (TypeError, ValueError):
+            enriched["grid_slot_minutes"] = None
+    elif _normalize_key(enriched.get("content_type", "")) not in {"movie", "movies"}:
+        from binge_schedule.content_catalog import _snap_binge_row_minutes
+
+        if enriched.get("runtime_minutes") is not None:
+            enriched["grid_slot_minutes"] = _snap_binge_row_minutes(int(enriched["runtime_minutes"]))
+    return enriched
 
 
 def _catalog_row_as_import(row: dict[str, Any]) -> dict[str, Any]:
@@ -1017,14 +1055,7 @@ def preview_import(session_id: str, sheet_configs: list[dict[str, Any]], cfg: An
     all_rows, match_stats, show_summaries = _apply_catalog_matching(all_rows, cfg)
 
     preview_limit = 100
-    preview_rows = all_rows[:preview_limit]
-    for row in preview_rows:
-        for key in ("runtime_minutes",):
-            if row.get(key) is not None:
-                try:
-                    row[key] = int(row[key])
-                except (TypeError, ValueError):
-                    pass
+    preview_rows = [_enrich_preview_row(row) for row in all_rows[:preview_limit]]
 
     return {
         "ready_count": ready,

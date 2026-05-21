@@ -687,6 +687,8 @@ function twoPartBaseTitle(block: ScheduledBlock): string {
     .toLowerCase()
 }
 
+const SERIES_END_WARNING_EPISODES = 10
+
 function buildScheduleNotes(blocks: ScheduledBlock[], episodes: Episode[]): ScheduleNote[] {
   const catalogOrder = buildCatalogOrder(episodes)
   const blocksByShow = new Map<string, ScheduledBlock[]>()
@@ -774,7 +776,7 @@ function buildScheduleNotes(blocks: ScheduledBlock[], episodes: Episode[]): Sche
 
     const lastScheduled = positions.reduce((best, item) => (item.position > best.position ? item : best))
     const remaining = catalog.count - lastScheduled.position - 1
-    if (remaining >= 0 && remaining <= 10) {
+    if (remaining >= 0 && remaining <= SERIES_END_WARNING_EPISODES) {
       const lastSlot = formatBlockAirSlot(lastScheduled.block)
       const lastLabel = episodeLabelFromBlock(lastScheduled.block)
       if (remaining === 0) {

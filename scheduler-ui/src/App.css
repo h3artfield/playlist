@@ -1707,6 +1707,53 @@
   flex-wrap: wrap;
 }
 
+.content-sheet-bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 12px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 10px;
+  background: rgba(30, 58, 138, 0.18);
+}
+
+.content-sheet-bulk-bar > span {
+  color: #bfdbfe;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding-bottom: 6px;
+}
+
+.content-sheet-bulk-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 120px;
+}
+
+.content-sheet-bulk-field span {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.content-sheet-bulk-field select,
+.content-sheet-bulk-field input {
+  min-width: 120px;
+}
+
+.content-sheet-select-col {
+  width: 36px;
+  text-align: center;
+}
+
+.content-sheet-table tr.content-sheet-row-selected {
+  background: rgba(59, 130, 246, 0.08);
+}
+
 .content-sheet-table-wrap {
   overflow: auto;
   max-height: 480px;

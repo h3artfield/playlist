@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { formatFetchError } from './api'
 import ImportFormatGuide from './ImportFormatGuide'
 import { checkImportWizardApi, importWizardApiError } from './scheduleApiBase'
-import { analyzeImportSheet, commitImport, parseImportFile, previewImport } from './contentImportApi'
+import { analyzeImportSheet, commitImport, fetchImportSampleRows, parseImportFile, previewImport } from './contentImportApi'
 import type {
   CanonicalField,
   CommitImportResponse,
   PreviewImportResponse,
+  PreviewRow,
   RowKind,
   SheetAnalysis,
   SheetConfig,
@@ -45,6 +46,12 @@ function formatShowSummary(summary: {
   return parts.join(' · ')
 }
 
+function formatPreviewSlot(row: PreviewRow): string {
+  const slot = row.grid_slot_minutes ?? row.slot_minutes
+  if (slot == null) return '—'
+  return String(slot)
+}
+
 export default function ImportWizard({ catalogRows, uploadActive, onClose, onImported }: ImportWizardProps) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -55,6 +62,7 @@ export default function ImportWizard({ catalogRows, uploadActive, onClose, onImp
   const [configs, setConfigs] = useState<SheetConfig[]>([])
   const [activeSheet, setActiveSheet] = useState('')
   const [preview, setPreview] = useState<PreviewImportResponse | null>(null)
+  const [mapSampleRows, setMapSampleRows] = useState<PreviewRow[]>([])
   const [step, setStep] = useState<'pick' | 'map' | 'review'>('pick')
   const [apiReady, setApiReady] = useState<boolean | null>(null)
 
@@ -184,6 +192,30 @@ export default function ImportWizard({ catalogRows, uploadActive, onClose, onImp
     }
   }, [sessionId, activeConfig?.sheet_name, activeConfig?.header_row])
 
+  const activeConfigSnapshot = useMemo(() => JSON.stringify(activeConfig ?? null), [activeConfig])
+
+  useEffect(() => {
+    if (!sessionId || !activeConfig || step !== 'map') return
+    if (!activeConfig.mapping.title) {
+      setMapSampleRows([])
+      return
+    }
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      void fetchImportSampleRows(sessionId, activeConfig)
+        .then((rows) => {
+          if (!cancelled) setMapSampleRows(rows)
+        })
+        .catch(() => {
+          if (!cancelled) setMapSampleRows([])
+        })
+    }, 350)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [sessionId, step, activeConfigSnapshot])
+
   async function handleCommit() {
     if (!sessionId) return
     setBusy(true)
@@ -236,6 +268,8 @@ export default function ImportWizard({ catalogRows, uploadActive, onClose, onImp
   }, [activeAnalysis])
 
   const catalogCounts = useMemo(() => catalogEpisodeCountByShow(catalogRows), [catalogRows])
+
+  const normalizedPreviewRows = mapSampleRows.length ? mapSampleRows : activeAnalysis?.sample_rows ?? []
 
   const sheetCatalogHint = useMemo(() => {
     if (!activeConfig) return null
@@ -417,7 +451,7 @@ export default function ImportWizard({ catalogRows, uploadActive, onClose, onImp
                   </div>
                 ))}
               </div>
-              {activeAnalysis.sample_rows?.length ? (
+              {normalizedPreviewRows.length ? (
                 <>
                   <h4>Normalized preview (first rows)</h4>
                   <div className="import-preview-table-wrap">
@@ -427,16 +461,18 @@ export default function ImportWizard({ catalogRows, uploadActive, onClose, onImp
                           <th>Show</th>
                           <th>Ep #</th>
                           <th>Title</th>
-                          <th>Runtime</th>
+                          <th>TRT</th>
+                          <th>Slot</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {activeAnalysis.sample_rows.map((row, index) => (
+                        {normalizedPreviewRows.map((row, index) => (
                           <tr key={`${row.display_name}-${index}`}>
                             <td>{row.display_name}</td>
                             <td>{row.episode_number || '—'}</td>
                             <td>{row.episode_title || '—'}</td>
                             <td>{row.runtime_minutes ?? '—'}</td>
+                            <td>{formatPreviewSlot(row)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -522,7 +558,8 @@ export default function ImportWizard({ catalogRows, uploadActive, onClose, onImp
                   <th>Show</th>
                   <th>Ep #</th>
                   <th>Title</th>
-                  <th>Runtime</th>
+                  <th>TRT</th>
+                  <th>Slot</th>
                   <th>Status</th>
                   <th>Genre</th>
                   <th>Sheet</th>
@@ -536,6 +573,7 @@ export default function ImportWizard({ catalogRows, uploadActive, onClose, onImp
                     <td>{row.episode_number || '—'}</td>
                     <td>{row.episode_title || '—'}</td>
                     <td>{row.runtime_minutes ?? '—'}</td>
+                    <td>{formatPreviewSlot(row)}</td>
                     <td>
                       {row.catalog_match_label ? (
                         <span className={`catalog-match catalog-match--${row.catalog_match ?? 'unknown'}`}>

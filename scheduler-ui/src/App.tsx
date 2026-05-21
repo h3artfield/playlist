@@ -34,6 +34,7 @@ type CatalogRow = {
   availability_status?: string
   original_airdate?: string
   runtime_minutes?: number | null
+  binge_row_minutes?: number | null
   synopsis_long?: string
   source_sheet?: string
   source_file?: string

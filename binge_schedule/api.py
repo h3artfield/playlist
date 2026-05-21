@@ -128,6 +128,11 @@ class ImportSheetAnalyzePayload(BaseModel):
     header_row: int = Field(default=1, ge=1, le=50)
 
 
+class ImportSampleRowsPayload(BaseModel):
+    session_id: str
+    sheet: ImportPreviewSheetConfig
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Playlist Schedule Builder API", version="0.1.0")
     app.add_middleware(
@@ -328,6 +333,20 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Could not analyze sheet: {exc}") from exc
+
+    @app.post("/api/content/import/sample-rows")
+    def import_content_sample_rows(payload: ImportSampleRowsPayload) -> dict[str, Any]:
+        from binge_schedule.content_import_wizard import sample_rows_for_config
+
+        if not payload.session_id:
+            raise HTTPException(status_code=400, detail="session_id is required")
+        try:
+            rows = sample_rows_for_config(payload.session_id, payload.sheet.model_dump())
+            return {"sample_rows": rows}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not build sample rows: {exc}") from exc
 
     @app.post("/api/content/import/preview")
     def import_content_preview(

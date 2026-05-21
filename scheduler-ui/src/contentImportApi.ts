@@ -4,7 +4,13 @@ import {
   importWizardApiError,
   scheduleApiFetch,
 } from './scheduleApiBase'
-import type { CommitImportResponse, ParseImportResponse, PreviewImportResponse, SheetConfig } from './contentImportTypes'
+import type {
+  CommitImportResponse,
+  ParseImportResponse,
+  PreviewImportResponse,
+  PreviewRow,
+  SheetConfig,
+} from './contentImportTypes'
 
 function parseErrorMessage(error: unknown, responseDetail: string): string {
   if (responseDetail) {
@@ -61,6 +67,20 @@ export async function analyzeImportSheet(
     throw new Error(parseErrorMessage(new Error(`HTTP ${response.status}`), detail))
   }
   return response.json() as Promise<import('./contentImportTypes').SheetAnalysis>
+}
+
+export async function fetchImportSampleRows(sessionId: string, sheet: SheetConfig): Promise<PreviewRow[]> {
+  const response = await scheduleApiFetch('/api/content/import/sample-rows', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, sheet }),
+  })
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    throw new Error(parseErrorMessage(new Error(`HTTP ${response.status}`), detail))
+  }
+  const payload = (await response.json()) as { sample_rows?: PreviewRow[] }
+  return payload.sample_rows ?? []
 }
 
 export async function previewImport(sessionId: string, sheets: SheetConfig[]): Promise<PreviewImportResponse> {

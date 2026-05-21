@@ -63,6 +63,8 @@ export type PreviewRow = {
   episode_number?: string
   episode_title?: string
   runtime_minutes?: number | null
+  slot_minutes?: number | null
+  grid_slot_minutes?: number | null
   genre?: string
   playable?: boolean
   source_sheet?: string
