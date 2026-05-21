@@ -9,7 +9,6 @@ from typing import Any, Optional
 import pandas as pd
 
 from binge_schedule.config_io import BuildConfig
-from binge_schedule.content_catalog import canonical_rows_from_config, write_canonical_catalog
 
 IMPORT_ALIASES: dict[str, set[str]] = {
     "series_title": {
@@ -361,6 +360,8 @@ def catalog_publish_paths() -> list[Path]:
 
 
 def publish_content_catalog(cfg: BuildConfig) -> tuple[list[dict[str, Any]], list[Path]]:
+    from binge_schedule.content_catalog import canonical_rows_from_config, write_canonical_catalog
+
     rows = canonical_rows_from_config(cfg)
     written: list[Path] = []
     for path in catalog_publish_paths():
