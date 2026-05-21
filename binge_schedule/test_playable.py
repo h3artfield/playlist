@@ -90,3 +90,37 @@ def test_nikki_load_standard_sheet_filters_playable_column():
     )
     assert [ep.title for ep in episodes] == ["Ep 6"]
     assert episodes[0].episode_num == 1
+
+
+def test_nikki_load_movies_accepts_year_original_airdate_header():
+    df = pd.DataFrame(
+        [
+            ["Title", "TRT", "Year/Original Airdate", "Playable"],
+            ["Alpha Movie", 90, 1999, "Yes"],
+            ["Beta Movie", 120, 2001, "Yes"],
+        ]
+    )
+    episodes = nikki.load_movies(
+        df,
+        prefix="MOV",
+        columns=NikkiColumnHeaders.movies_tab(),
+    )
+    assert len(episodes) == 2
+    assert episodes[0].title == "Alpha Movie (1999)"
+    assert episodes[1].title == "Beta Movie (2001)"
+
+
+def test_import_wizard_movies_mapping_does_not_duplicate_title_as_series():
+    from binge_schedule.content_import_wizard import analyze_sheet
+
+    df_raw = pd.DataFrame(
+        [
+            ["Title", "TRT", "Year/Original Airdate", "Genre", "Playable", "Synopsis"],
+            ["Alpha Movie", 90, 1999, "Drama", "Yes", "Summary"],
+        ]
+    )
+    analysis = analyze_sheet("MOVIES", df_raw)
+    mapping = analysis["suggested_mapping"]
+    assert mapping["title"] == "Title"
+    assert mapping.get("series_title", "") == ""
+    assert analysis["suggested_row_kind"] == "movie"

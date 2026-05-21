@@ -28,11 +28,11 @@ class NikkiColumnHeaders:
 
     @classmethod
     def movies_tab(cls) -> NikkiColumnHeaders:
-        """``movies`` sheet: Title + Year; no season/episode column."""
+        """``movies`` sheet: Title + year/airdate; no season/episode column."""
         return cls(
             episode="Title",
             season_episode=None,
-            year="Year",
+            year="Year/Original Airdate",
             stars=None,
             synopsis=None,
         )

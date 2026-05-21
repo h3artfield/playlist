@@ -38,6 +38,26 @@ def _row_header_index_map(row: pd.Series) -> dict[str, int]:
     return m
 
 
+_YEAR_HEADER_ALIASES = (
+    "year/original airdate",
+    "year",
+    "original airdate",
+    "release date",
+    "airdate",
+)
+
+
+def _find_year_column(hm: dict[str, int], headers: NikkiColumnHeaders) -> int | None:
+    if headers.year:
+        lk = _norm_header(headers.year)
+        if lk in hm:
+            return hm[lk]
+    for alias in _YEAR_HEADER_ALIASES:
+        if alias in hm:
+            return hm[alias]
+    return None
+
+
 def _find_header_row_and_columns(
     df: pd.DataFrame, headers: NikkiColumnHeaders
 ) -> tuple[Optional[int], dict[str, int]]:
@@ -45,8 +65,6 @@ def _find_header_row_and_columns(
     required: list[tuple[str, str]] = [("episode", headers.episode)]
     if headers.season_episode:
         required.append(("season_episode", headers.season_episode))
-    if headers.year:
-        required.append(("year", headers.year))
 
     for i in range(min(35, len(df))):
         row = df.iloc[i]
@@ -61,6 +79,9 @@ def _find_header_row_and_columns(
             idx[logical] = hm[lk]
         if not ok:
             continue
+        year_col = _find_year_column(hm, headers)
+        if year_col is not None:
+            idx["year"] = year_col
         if headers.stars:
             lk = _norm_header(headers.stars)
             if lk in hm:

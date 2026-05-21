@@ -197,11 +197,20 @@ def guess_column(columns: list[str], canon: str) -> tuple[str, MatchQuality]:
 def suggest_mapping(columns: list[str]) -> tuple[dict[str, str], dict[str, MatchQuality]]:
     mapping: dict[str, str] = {}
     match: dict[str, MatchQuality] = {}
+    used_columns: set[str] = set()
     for field in CANONICAL_FIELDS:
         key = str(field["key"])
         column, quality = guess_column(columns, key)
+        if column and column in used_columns:
+            column, quality = "", "unmapped"
+        if column:
+            used_columns.add(column)
         mapping[key] = column
         match[key] = quality
+    title_col = mapping.get("title", "")
+    if title_col and mapping.get("series_title") == title_col:
+        mapping["series_title"] = ""
+        match["series_title"] = "unmapped"
     return mapping, match
 
 
@@ -730,7 +739,14 @@ def rows_from_sheet(
         elif raw_type:
             is_series = raw_type not in {"movie", "movies", "special", "specials", "film", "feature"}
         else:
-            is_series = bool(series_title and (ep_num or title))
+            same_title_column = bool(
+                mapping.get("title")
+                and mapping.get("series_title") == mapping.get("title")
+            )
+            if same_title_column and not ep_num:
+                is_series = False
+            else:
+                is_series = bool(series_title and (ep_num or title))
 
         if is_series and not series_title:
             series_title = sheet_name.strip()
