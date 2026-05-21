@@ -139,6 +139,7 @@ export default function App() {
   const [draftStationId, setDraftStationId] = useState('')
   const [generatedSchedule, setGeneratedSchedule] = useState<AutoGenerateResult | null>(null)
   const [builderSessionKey, setBuilderSessionKey] = useState(0)
+  const [catalogRefreshKey, setCatalogRefreshKey] = useState(0)
   const [savedSchedules, setSavedSchedules] = useState<BaseScheduleSummary[]>([])
   const [selectedSchedule, setSelectedSchedule] = useState<BaseScheduleSummary | null>(null)
   const [schedulesStatus, setSchedulesStatus] = useState('Loading saved schedules...')
@@ -256,6 +257,7 @@ export default function App() {
           <CreateSchedulePage
             activeBase={selectedSchedule}
             onBlankSchedule={(stationId) => {
+              clearScheduleDraft(stationId)
               setDraftStationId(stationId)
               setGeneratedSchedule(null)
               setBuilderSessionKey((key) => key + 1)
@@ -278,6 +280,7 @@ export default function App() {
             initialStartDate={generatedSchedule?.week_monday}
             initialScheduleLengthWeeks={generatedSchedule?.week_count}
             importKey={generatedSchedule ? builderSessionKey : undefined}
+            catalogRefreshKey={catalogRefreshKey}
             onBack={() => {
               setGeneratedSchedule(null)
               setPage('create')
@@ -285,7 +288,9 @@ export default function App() {
             onBaseSaved={(path) => void refreshSchedules(path)}
           />
         ) : null}
-        {page === 'archive' ? <ArchivePage /> : null}
+        {page === 'archive' ? (
+          <ArchivePage onCatalogChanged={() => setCatalogRefreshKey((key) => key + 1)} />
+        ) : null}
         {page === 'schedules' ? (
           <SchedulesPage
             schedules={savedSchedules}
@@ -455,7 +460,7 @@ function CreateSchedulePage({
   )
 }
 
-function ArchivePage() {
+function ArchivePage({ onCatalogChanged }: { onCatalogChanged?: () => void }) {
   const [rows, setRows] = useState<CatalogRow[]>([])
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState<ContentCategory>('series')
@@ -498,6 +503,7 @@ function ArchivePage() {
         }),
       })
       await reloadCatalog()
+      onCatalogChanged?.()
       setShowName('')
       setEpisodeNumber('')
       setEpisodeTitle('')
@@ -515,6 +521,7 @@ function ArchivePage() {
 
   function handleImportComplete(result: CommitImportResponse) {
     void reloadCatalog().then(() => {
+      onCatalogChanged?.()
       const stats = result.match_stats
       const detail = stats
         ? ` (${[stats.new_shows ? `${stats.new_shows} new shows` : '', stats.new_episodes ? `${stats.new_episodes} new episodes` : '', stats.updates ? `${stats.updates} updates` : '']

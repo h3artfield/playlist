@@ -231,13 +231,17 @@ def create_app() -> FastAPI:
 
     @app.get("/api/content-catalog")
     def content_catalog(config: str = str(DEFAULT_CONFIG)) -> dict[str, Any]:
-        if Path(config) == DEFAULT_CONFIG:
-            static_payload = _static_catalog_payload()
-            if static_payload is not None:
-                return static_payload
         cfg_path = _safe_config_path(config)
         cfg = load_build_config(cfg_path)
         rows = canonical_rows_from_config(cfg)
+        static_payload = _static_catalog_payload()
+        if (
+            static_payload is not None
+            and not rows
+            and static_payload.get("row_count", 0) > 0
+            and Path(config) == DEFAULT_CONFIG
+        ):
+            return static_payload
         return {
             "schema_version": 1,
             "row_count": len(rows),

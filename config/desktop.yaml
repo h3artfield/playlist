@@ -1,0 +1,9 @@
+gracenote_binge_id: 45397
+timezone_note: local
+wrap_episodes: true
+schedule_builder:
+  managed: true
+  kind: base_schedule
+  source: desktop_import
+shows: {}
+weeks: []

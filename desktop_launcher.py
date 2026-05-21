@@ -181,6 +181,8 @@ def main() -> int:
             logf.write(f"Resolved React UI path: {react_dist}\n")
             logf.write(f"Working directory: {root}\n")
             os.environ.setdefault("SCHEDULE_BUILDER_REACT_DIST", str(react_dist))
+            # Desktop builds use import-only catalog (no bundled Nikki/archive shows).
+            os.environ.setdefault("SCHEDULE_BUILDER_DEFAULT_CONFIG", "config/desktop.yaml")
             demo_schedule = root / "saved_schedules" / "test" / "2026-05-19_21-33-48" / "base_schedule.yaml"
             if demo_schedule.is_file():
                 os.environ.setdefault("SCHEDULE_BUILDER_DEFAULT_CONFIG", "config/blank_schedule.yaml")

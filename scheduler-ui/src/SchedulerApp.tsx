@@ -854,6 +854,7 @@ export default function SchedulerApp({
   initialStartDate,
   initialScheduleLengthWeeks,
   importKey,
+  catalogRefreshKey = 0,
   onBack,
   onBaseSaved,
 }: {
@@ -862,6 +863,7 @@ export default function SchedulerApp({
   initialStartDate?: string
   initialScheduleLengthWeeks?: number
   importKey?: number
+  catalogRefreshKey?: number
   onBack?: () => void
   onBaseSaved?: (path: string) => void
 }) {
@@ -933,7 +935,11 @@ export default function SchedulerApp({
   const [downloadStatus, setDownloadStatus] = useState('')
   const contentInputRef = useRef<HTMLInputElement | null>(null)
 
-  const availableEpisodes = catalogEpisodes.length ? catalogEpisodes : SAMPLE_EPISODES
+  const availableEpisodes = catalogEpisodes.length
+    ? catalogEpisodes
+    : import.meta.env.DEV
+      ? SAMPLE_EPISODES
+      : []
   const selectedRangeDurations = useMemo(() => selectedRanges.map((range) => minutesBetween(range.start, range.end)), [selectedRanges])
   const selectedSlotMinutes = selectedRangeDurations.length ? Math.min(...selectedRangeDurations) : null
   const episodesMatchingContentMode = useMemo(
@@ -1074,15 +1080,24 @@ export default function SchedulerApp({
           .map((row, index) => episodeFromCatalogRow(row, index))
           .filter((ep): ep is Episode => Boolean(ep))
         setCatalogEpisodes(episodes)
-        setCatalogStatus(episodes.length ? `${episodes.length.toLocaleString()} normalized rows loaded` : 'Using fallback demo content')
+        setCatalogStatus(
+          episodes.length
+            ? `${episodes.length.toLocaleString()} normalized rows loaded`
+            : import.meta.env.DEV
+              ? 'Using fallback demo content'
+              : 'No imported content yet — add shows in Available Content first',
+        )
       })
       .catch(() => {
-        if (!cancelled) setCatalogStatus('Using fallback demo content')
+        if (!cancelled) {
+          setCatalogEpisodes([])
+          setCatalogStatus(import.meta.env.DEV ? 'Using fallback demo content' : 'Could not load content catalog')
+        }
       })
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [catalogRefreshKey])
 
   useEffect(() => {
     setVisibleWeekIndex((index) => Math.min(index, scheduleLengthWeeks - 1))

@@ -681,8 +681,14 @@ def _unconfigured_archive_rows(
 def canonical_rows_from_config(cfg: BuildConfig, *, station_id: Optional[str] = None) -> list[dict[str, Any]]:
     """Normalize YAML/Nikki content rules into the shared content table."""
     from binge_schedule.content_import import load_imported_catalog_rows
+    from binge_schedule.runtime_paths import is_desktop_runtime
 
     sid = station_id or (cfg.config_path.stem if cfg.config_path else "default")
+    if is_desktop_runtime():
+        imported = load_imported_catalog_rows(cfg)
+        if imported:
+            return canonical_rows_from_imported_rows(imported, station_id=sid)
+        return []
     workbook_path = resolved_nikki_workbook_path(cfg)
     rows: list[dict[str, Any]] = []
     for key in sorted(cfg.shows):
