@@ -434,6 +434,9 @@ def build_manual_row(
     ep_title = _clean_text(episode_title)
     if is_series and not ep_num and not ep_title:
         raise ValueError("Series rows need an episode number or episode title.")
+    if runtime_minutes is None or int(runtime_minutes) <= 0:
+        raise ValueError("TRT (runtime minutes) is required.")
+    runtime_minutes = int(runtime_minutes)
     row: dict[str, Any] = {
         "content_type": "series" if is_series else normalized_type or "movie",
         "display_name": show,

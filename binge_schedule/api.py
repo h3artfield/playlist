@@ -434,6 +434,11 @@ def create_app() -> FastAPI:
     def base_schedule_view(payload: BaseSchedulePathPayload) -> dict[str, Any]:
         return _base_schedule_detail_response(payload.path)
 
+    @app.post("/api/base-schedules/delete")
+    def delete_base_schedule(payload: BaseSchedulePathPayload) -> dict[str, Any]:
+        deleted_path = _delete_builder_base_schedule(payload.path)
+        return {"deleted": True, "path": deleted_path}
+
     @app.post("/api/schedule/analyze-rules")
     def analyze_rules(payload: BlocksPayload) -> dict[str, Any]:
         rules = analyze_schedule_rules(payload.blocks, catalog_rows=payload.catalog_rows)

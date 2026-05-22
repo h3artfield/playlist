@@ -548,6 +548,13 @@ function ArchivePage({ onCatalogChanged }: { onCatalogChanged?: () => void }) {
   }, [])
 
   async function submitManualImport() {
+    const runtimeValue = runtimeMinutes.trim()
+    const runtime = Number(runtimeValue)
+    if (!runtimeValue || !Number.isFinite(runtime) || runtime <= 0) {
+      setImportStatus('TRT (runtime minutes) is required.')
+      return
+    }
+
     setIsImporting(true)
     setImportStatus('')
     try {
@@ -558,7 +565,7 @@ function ArchivePage({ onCatalogChanged }: { onCatalogChanged?: () => void }) {
           show_name: showName.trim(),
           episode_number: episodeNumber.trim(),
           episode_title: episodeTitle.trim(),
-          runtime_minutes: runtimeMinutes.trim() ? Number(runtimeMinutes) : null,
+          runtime_minutes: runtime,
           slot_minutes: slotMinutes.trim() ? Number(slotMinutes) : null,
           genre: genre.trim(),
         }),
@@ -695,10 +702,11 @@ function ArchivePage({ onCatalogChanged }: { onCatalogChanged?: () => void }) {
                 ) : null}
                 <div className="add-content-row add-content-row-footer">
                   <label className="schedule-field add-field-narrow">
-                    <span>Runtime (min)</span>
+                    <span>TRT (min)</span>
                     <input
                       type="number"
-                      placeholder="30"
+                      min={1}
+                      required
                       value={runtimeMinutes}
                       onChange={(event) => setRuntimeMinutes(event.target.value)}
                     />
@@ -722,7 +730,12 @@ function ArchivePage({ onCatalogChanged }: { onCatalogChanged?: () => void }) {
                   <button
                     className="primary-action card-action add-content-submit"
                     type="button"
-                    disabled={isImporting || !showName.trim()}
+                    disabled={
+                      isImporting ||
+                      !showName.trim() ||
+                      !runtimeMinutes.trim() ||
+                      Number(runtimeMinutes) <= 0
+                    }
                     onClick={() => void submitManualImport()}
                   >
                     {isImporting ? 'Adding...' : 'Add content'}
