@@ -422,6 +422,7 @@ def build_manual_row(
     episode_number: str = "",
     episode_title: str = "",
     runtime_minutes: Optional[int] = None,
+    slot_minutes: Optional[int] = None,
     genre: str = "",
 ) -> dict[str, Any]:
     show = _clean_text(show_name)
@@ -433,7 +434,7 @@ def build_manual_row(
     ep_title = _clean_text(episode_title)
     if is_series and not ep_num and not ep_title:
         raise ValueError("Series rows need an episode number or episode title.")
-    return {
+    row: dict[str, Any] = {
         "content_type": "series" if is_series else normalized_type or "movie",
         "display_name": show,
         "series_title": show if is_series else "",
@@ -444,6 +445,9 @@ def build_manual_row(
         "source_sheet": "manual",
         "source_file": "schedule_builder",
     }
+    if slot_minutes is not None:
+        row["slot_minutes"] = slot_minutes
+    return row
 
 
 def catalog_publish_paths() -> list[Path]:

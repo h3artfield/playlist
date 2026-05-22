@@ -26,7 +26,9 @@ type ContentSheetEditorProps = {
   onSaved: () => void
 }
 
-const SLOT_OPTIONS = ['', '30', '60', '120']
+const SLOT_OPTIONS = ['', '30', '60', '120'] as const
+
+export { SLOT_OPTIONS }
 
 function newRowId() {
   return `new-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`

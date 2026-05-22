@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import SchedulerApp from './SchedulerApp'
 import { fetchCatalog, fetchJson } from './api'
 import { checkScheduleApi } from './scheduleApiBase'
-import ContentSheetEditor, { catalogRowsToEditable } from './ContentSheetEditor'
+import ContentSheetEditor, { catalogRowsToEditable, SLOT_OPTIONS } from './ContentSheetEditor'
 import ImportWizard from './ImportWizard'
 import type { CommitImportResponse } from './contentImportTypes'
 import AutoGenerateConfirmDialog from './AutoGenerateConfirmDialog'
@@ -533,6 +533,7 @@ function ArchivePage({ onCatalogChanged }: { onCatalogChanged?: () => void }) {
   const [episodeNumber, setEpisodeNumber] = useState('')
   const [episodeTitle, setEpisodeTitle] = useState('')
   const [runtimeMinutes, setRuntimeMinutes] = useState('')
+  const [slotMinutes, setSlotMinutes] = useState('')
   const [genre, setGenre] = useState('')
   async function reloadCatalog() {
     const payload = await fetchCatalog<{ rows?: CatalogRow[] }>()
@@ -558,6 +559,7 @@ function ArchivePage({ onCatalogChanged }: { onCatalogChanged?: () => void }) {
           episode_number: episodeNumber.trim(),
           episode_title: episodeTitle.trim(),
           runtime_minutes: runtimeMinutes.trim() ? Number(runtimeMinutes) : null,
+          slot_minutes: slotMinutes.trim() ? Number(slotMinutes) : null,
           genre: genre.trim(),
         }),
       })
@@ -567,6 +569,7 @@ function ArchivePage({ onCatalogChanged }: { onCatalogChanged?: () => void }) {
       setEpisodeNumber('')
       setEpisodeTitle('')
       setRuntimeMinutes('')
+      setSlotMinutes('')
       setGenre('')
       setImportStatus(
         `Added ${result.imported_count ?? 1} row(s). Catalog now has ${(result.catalog_row_count ?? 0).toLocaleString()} rows.`,
@@ -700,6 +703,18 @@ function ArchivePage({ onCatalogChanged }: { onCatalogChanged?: () => void }) {
                       onChange={(event) => setRuntimeMinutes(event.target.value)}
                     />
                   </label>
+                  {contentType === 'series' ? (
+                    <label className="schedule-field add-field-narrow">
+                      <span>Slot (min)</span>
+                      <select value={slotMinutes} onChange={(event) => setSlotMinutes(event.target.value)}>
+                        {SLOT_OPTIONS.map((option) => (
+                          <option key={option || 'auto'} value={option}>
+                            {option ? `${option} min` : 'Auto from TRT'}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
                   <label className="schedule-field add-field-medium">
                     <span>Genre</span>
                     <input value={genre} onChange={(event) => setGenre(event.target.value)} placeholder="Optional" />

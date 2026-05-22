@@ -91,6 +91,7 @@ class ImportContentRowPayload(BaseModel):
     episode_number: str = ""
     episode_title: str = ""
     runtime_minutes: Optional[int] = None
+    slot_minutes: Optional[int] = None
     genre: str = ""
 
 
@@ -264,6 +265,7 @@ def create_app() -> FastAPI:
                 episode_number=payload.episode_number,
                 episode_title=payload.episode_title,
                 runtime_minutes=payload.runtime_minutes,
+                slot_minutes=payload.slot_minutes,
                 genre=payload.genre,
             )
         except ValueError as exc:

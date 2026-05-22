@@ -1223,7 +1223,19 @@ export default function SchedulerApp({
     }
   }
 
+  function blurActiveFormControl() {
+    const active = document.activeElement
+    if (
+      active instanceof HTMLInputElement ||
+      active instanceof HTMLSelectElement ||
+      active instanceof HTMLTextAreaElement
+    ) {
+      active.blur()
+    }
+  }
+
   function handleSelect(arg: DateSelectArg) {
+    blurActiveFormControl()
     setSelectedRanges(normalizeSelection(arg.start, arg.end))
     setLiveSelectionRanges([])
     arg.view.calendar.unselect()
@@ -1231,6 +1243,7 @@ export default function SchedulerApp({
     setShowQuery('')
     setStartingEpisodeId('')
     setContentMenuOpen(false)
+    requestAnimationFrame(() => contentInputRef.current?.focus())
   }
 
   function changeContentMode(mode: 'series' | 'movies') {

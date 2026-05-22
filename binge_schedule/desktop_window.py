@@ -7,6 +7,7 @@ import socket
 import time
 import urllib.error
 import urllib.request
+from typing import Any
 
 
 def api_health_ok(base_url: str, *, timeout: float = 0.75) -> bool:
@@ -51,13 +52,28 @@ def wait_for_api(base_url: str, *, timeout_seconds: float = 60.0) -> bool:
     return False
 
 
+_applied_window_mode: str | None = None
+
+
 def _normalize_mode(mode: str) -> str:
     cleaned = str(mode or "windowed").strip().lower()
     return cleaned if cleaned in {"fullscreen", "windowed"} else "windowed"
 
 
+def _ensure_windowed_layout(window: Any) -> None:
+    try:
+        window.resizable = True
+    except Exception:
+        pass
+    try:
+        window.resize(1280, 800)
+    except Exception:
+        pass
+
+
 def apply_desktop_window_mode(mode: str) -> bool:
     """Switch the running native window between fullscreen and resizable windowed."""
+    global _applied_window_mode
     try:
         import webview
     except ImportError:
@@ -68,12 +84,23 @@ def apply_desktop_window_mode(mode: str) -> bool:
 
     window = webview.windows[0]
     target = _normalize_mode(mode)
+    current = _applied_window_mode or ("fullscreen" if getattr(window, "fullscreen", False) else "windowed")
+
     try:
+        if target == current:
+            if target == "windowed":
+                _ensure_windowed_layout(window)
+            return True
+
         if target == "fullscreen":
-            if not window.fullscreen:
+            if not getattr(window, "fullscreen", False):
                 window.toggle_fullscreen()
-        elif window.fullscreen:
-            window.toggle_fullscreen()
+        else:
+            if getattr(window, "fullscreen", False) or current == "fullscreen":
+                window.toggle_fullscreen()
+            _ensure_windowed_layout(window)
+
+        _applied_window_mode = target
         return True
     except Exception:
         return False
@@ -95,6 +122,8 @@ def open_native_window(
 
     mode = _normalize_mode(window_mode)
     use_fullscreen = mode == "fullscreen"
+    global _applied_window_mode
+    _applied_window_mode = mode
 
     window = webview.create_window(
         "Schedule Builder",
