@@ -83,6 +83,19 @@ type AutoGenerateResult = {
   blocks: GeneratedBlock[]
 }
 
+type BuilderSession = {
+  stationId: string
+  sessionKey: number
+  generatedSchedule: AutoGenerateResult | null
+  savedDirectory?: string
+}
+
+function savedScheduleDirectory(path: string): string {
+  const normalized = path.replace(/\\/g, '/')
+  const index = normalized.lastIndexOf('/')
+  return index >= 0 ? normalized.slice(0, index) : normalized
+}
+
 const NAV_ITEMS: Array<{ id: PageId; label: string }> = [
   { id: 'create', label: 'Create Schedule' },
   { id: 'archive', label: 'Available Content' },
@@ -136,9 +149,7 @@ function scheduleSavedLabel(schedule: BaseScheduleSummary): string {
 
 export default function App() {
   const [page, setPage] = useState<PageId>('create')
-  const [draftStationId, setDraftStationId] = useState('')
-  const [generatedSchedule, setGeneratedSchedule] = useState<AutoGenerateResult | null>(null)
-  const [builderSessionKey, setBuilderSessionKey] = useState(0)
+  const [builderSession, setBuilderSession] = useState<BuilderSession | null>(null)
   const [catalogRefreshKey, setCatalogRefreshKey] = useState(0)
   const [savedSchedules, setSavedSchedules] = useState<BaseScheduleSummary[]>([])
   const [selectedSchedule, setSelectedSchedule] = useState<BaseScheduleSummary | null>(null)
@@ -193,6 +204,22 @@ export default function App() {
     setSelectedSchedule(schedule)
   }
 
+  function navigateTo(nextPage: PageId) {
+    if (nextPage === 'create' && builderSession) {
+      setPage('blank')
+      return
+    }
+    setPage(nextPage)
+  }
+
+  function openBuilderSession(session: Omit<BuilderSession, 'sessionKey'>) {
+    setBuilderSession({
+      ...session,
+      sessionKey: Date.now(),
+    })
+    setPage('blank')
+  }
+
   return (
     <div className="app-shell">
       <header className="main-header">
@@ -242,7 +269,7 @@ export default function App() {
               className={page === item.id || (page === 'blank' && item.id === 'create') ? 'active' : ''}
               key={item.id}
               type="button"
-              onClick={() => setPage(item.id)}
+              onClick={() => navigateTo(item.id)}
             >
               {item.id === 'schedules' && selectedSchedule
                 ? `${item.label}: ${selectedSchedule.station_id || selectedSchedule.label.replace(/^Station\s+/i, '')}`
@@ -256,37 +283,40 @@ export default function App() {
         {page === 'create' ? (
           <CreateSchedulePage
             activeBase={selectedSchedule}
+            resumeBuilder={Boolean(builderSession)}
+            onResumeBuilder={() => setPage('blank')}
             onBlankSchedule={(stationId) => {
               clearScheduleDraft(stationId)
-              setDraftStationId(stationId)
-              setGeneratedSchedule(null)
-              setBuilderSessionKey((key) => key + 1)
-              setPage('blank')
+              openBuilderSession({
+                stationId,
+                generatedSchedule: null,
+              })
             }}
             onAutoGenerate={(result) => {
-              setDraftStationId(result.station_id)
-              setGeneratedSchedule(result)
-              setBuilderSessionKey((key) => key + 1)
-              setPage('blank')
+              clearScheduleDraft(result.station_id)
+              openBuilderSession({
+                stationId: result.station_id,
+                generatedSchedule: result,
+              })
             }}
-            onOpenSchedulePicker={() => setPage('schedules')}
+            onOpenSchedulePicker={() => navigateTo('schedules')}
           />
         ) : null}
-        {page === 'blank' ? (
-          <SchedulerApp
-            key={`builder-${builderSessionKey}`}
-            stationId={draftStationId}
-            initialBlocks={generatedSchedule?.blocks}
-            initialStartDate={generatedSchedule?.week_monday}
-            initialScheduleLengthWeeks={generatedSchedule?.week_count}
-            importKey={generatedSchedule ? builderSessionKey : undefined}
-            catalogRefreshKey={catalogRefreshKey}
-            onBack={() => {
-              setGeneratedSchedule(null)
-              setPage('create')
-            }}
-            onBaseSaved={(path) => void refreshSchedules(path)}
-          />
+        {builderSession ? (
+          <div className={page === 'blank' ? 'builder-session-visible' : 'builder-session-hidden'} aria-hidden={page !== 'blank'}>
+            <SchedulerApp
+              key={`builder-${builderSession.sessionKey}`}
+              stationId={builderSession.stationId}
+              initialBlocks={builderSession.generatedSchedule?.blocks}
+              initialStartDate={builderSession.generatedSchedule?.week_monday}
+              initialScheduleLengthWeeks={builderSession.generatedSchedule?.week_count}
+              importKey={builderSession.generatedSchedule ? builderSession.sessionKey : undefined}
+              initialSavedDirectory={builderSession.savedDirectory}
+              catalogRefreshKey={catalogRefreshKey}
+              onBack={() => setPage('create')}
+              onBaseSaved={(path) => void refreshSchedules(path)}
+            />
+          </div>
         ) : null}
         {page === 'archive' ? (
           <ArchivePage onCatalogChanged={() => setCatalogRefreshKey((key) => key + 1)} />
@@ -297,6 +327,18 @@ export default function App() {
             selectedPath={selectedSchedule?.path || ''}
             status={schedulesStatus}
             onAssign={selectSchedule}
+            onEdit={(schedule, detail) => {
+              openBuilderSession({
+                stationId: detail.station_id || schedule.station_id || '',
+                generatedSchedule: {
+                  station_id: detail.station_id || schedule.station_id || '',
+                  week_monday: detail.week_monday,
+                  week_count: detail.week_count,
+                  blocks: detail.blocks,
+                },
+                savedDirectory: savedScheduleDirectory(schedule.path),
+              })
+            }}
             onRefresh={() => void refreshSchedules()}
           />
         ) : null}
@@ -307,11 +349,15 @@ export default function App() {
 
 function CreateSchedulePage({
   activeBase,
+  resumeBuilder,
+  onResumeBuilder,
   onBlankSchedule,
   onAutoGenerate,
   onOpenSchedulePicker,
 }: {
   activeBase: BaseScheduleSummary | null
+  resumeBuilder: boolean
+  onResumeBuilder: () => void
   onBlankSchedule: (stationId: string) => void
   onAutoGenerate: (result: AutoGenerateResult) => void
   onOpenSchedulePicker: () => void
@@ -365,6 +411,19 @@ function CreateSchedulePage({
 
   return (
     <main className="app-page">
+      {resumeBuilder ? (
+        <section className="create-panel create-panel--simple">
+          <div>
+            <h2>Schedule in progress</h2>
+            <p className="muted">Your calendar draft is still open. Continue editing or start a new schedule below.</p>
+          </div>
+          <div className="create-actions create-actions--solo">
+            <button className="primary-action card-action" type="button" onClick={onResumeBuilder}>
+              Continue editing
+            </button>
+          </div>
+        </section>
+      ) : null}
       <section className="create-panel">
         <div>
           <h2>Create a schedule</h2>
@@ -797,17 +856,21 @@ function SchedulesPage({
   selectedPath,
   status,
   onAssign,
+  onEdit,
   onRefresh,
 }: {
   schedules: BaseScheduleSummary[]
   selectedPath: string
   status: string
   onAssign: (schedule: BaseScheduleSummary) => void
+  onEdit: (schedule: BaseScheduleSummary, detail: ScheduleDetail) => void
   onRefresh: () => void
 }) {
   const [viewingPath, setViewingPath] = useState('')
   const [viewLoadingPath, setViewLoadingPath] = useState('')
+  const [editLoadingPath, setEditLoadingPath] = useState('')
   const [viewError, setViewError] = useState('')
+  const [editError, setEditError] = useState('')
   const [viewDetail, setViewDetail] = useState<ScheduleDetail | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<BaseScheduleSummary | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
@@ -836,6 +899,26 @@ function SchedulesPage({
     }
   }
 
+  async function loadScheduleDetail(schedule: BaseScheduleSummary): Promise<ScheduleDetail> {
+    return fetchJson<ScheduleDetail>('/api/base-schedules/view', {
+      method: 'POST',
+      body: JSON.stringify({ path: schedule.path }),
+    })
+  }
+
+  async function openEditor(schedule: BaseScheduleSummary) {
+    setEditError('')
+    setEditLoadingPath(schedule.path)
+    try {
+      const detail = await loadScheduleDetail(schedule)
+      onEdit(schedule, detail)
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : 'Could not load schedule for editing.')
+    } finally {
+      setEditLoadingPath('')
+    }
+  }
+
   async function toggleView(schedule: BaseScheduleSummary) {
     if (viewingPath === schedule.path) {
       setViewingPath('')
@@ -848,10 +931,7 @@ function SchedulesPage({
     setViewError('')
     setViewLoadingPath(schedule.path)
     try {
-      const detail = await fetchJson<ScheduleDetail>('/api/base-schedules/view', {
-        method: 'POST',
-        body: JSON.stringify({ path: schedule.path }),
-      })
+      const detail = await loadScheduleDetail(schedule)
       setViewDetail(detail)
     } catch (error) {
       setViewError(error instanceof Error ? error.message : 'Could not load schedule.')
@@ -881,6 +961,7 @@ function SchedulesPage({
             const isSelected = schedule.path === selectedPath
             const isViewOpen = viewingPath === schedule.path
             const isLoadingView = viewLoadingPath === schedule.path
+            const isLoadingEdit = editLoadingPath === schedule.path
             const previewBlocks =
               isViewOpen && viewDetail?.path === schedule.path
                 ? [...viewDetail.blocks].sort((a, b) => String(a.start).localeCompare(String(b.start)))
@@ -905,6 +986,14 @@ function SchedulesPage({
                         onClick={() => void toggleView(schedule)}
                       >
                         {isViewOpen ? 'Hide' : 'View'}
+                      </button>
+                      <button
+                        className="ghost-action"
+                        type="button"
+                        disabled={Boolean(isLoadingEdit)}
+                        onClick={() => void openEditor(schedule)}
+                      >
+                        {isLoadingEdit ? 'Opening…' : 'Edit'}
                       </button>
                       <button
                         className="primary-action schedule-assign-btn"
@@ -981,6 +1070,8 @@ function SchedulesPage({
           <p className="muted">Save a schedule from the builder results page to use it here for auto-generate.</p>
         </section>
       )}
+
+      {editError ? <p className="panel-status-error schedule-delete-error">{editError}</p> : null}
 
       {deleteError ? <p className="panel-status-error schedule-delete-error">{deleteError}</p> : null}
 

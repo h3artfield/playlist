@@ -408,6 +408,14 @@
   min-width: 0;
 }
 
+.builder-session-hidden {
+  display: none;
+}
+
+.builder-session-visible {
+  display: block;
+}
+
 .app-page {
   padding: 28px;
 }

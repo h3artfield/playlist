@@ -4,6 +4,8 @@ import timeGridPlugin from '@fullcalendar/timegrid'
 import interactionPlugin from '@fullcalendar/interaction'
 import type {
   DateSelectArg,
+  EventApi,
+  EventChangeArg,
   EventClickArg,
   EventContentArg,
   EventInput,
@@ -522,6 +524,11 @@ function eventFromBlock(block: ScheduledBlock): EventInput {
   }
 }
 
+function blockIdForTimes(block: Pick<ScheduledBlock, 'id' | 'episodeId'>, start: Date): string {
+  const stem = block.episodeId || (block.id.includes('-') ? block.id.slice(0, block.id.lastIndexOf('-')) : block.id)
+  return `${stem}-${start.getTime()}`
+}
+
 function renderEventContent(arg: EventContentArg) {
   const block = arg.event.extendedProps as Partial<ScheduledBlock>
   if (!block.show) return null
@@ -854,6 +861,7 @@ export default function SchedulerApp({
   initialStartDate,
   initialScheduleLengthWeeks,
   importKey,
+  initialSavedDirectory,
   catalogRefreshKey = 0,
   onBack,
   onBaseSaved,
@@ -863,6 +871,7 @@ export default function SchedulerApp({
   initialStartDate?: string
   initialScheduleLengthWeeks?: number
   importKey?: number
+  initialSavedDirectory?: string
   catalogRefreshKey?: number
   onBack?: () => void
   onBaseSaved?: (path: string) => void
@@ -889,7 +898,8 @@ export default function SchedulerApp({
   }
   const initialDraft = initialDraftRef.current
   const showNewScheduleSetup = importKey == null
-  const fromAutoGenerate = importKey != null
+  const fromAutoGenerate = importKey != null && !initialSavedDirectory
+  const editingSavedSchedule = Boolean(initialSavedDirectory)
 
   const [blocks, setBlocks] = useState<ScheduledBlock[]>(() => initialDraft?.blocks || [])
   const [selectedRanges, setSelectedRanges] = useState<TimeRange[]>([])
@@ -930,7 +940,7 @@ export default function SchedulerApp({
   const [generateResult, setGenerateResult] = useState<GenerateResult | null>(null)
   const [viewMode, setViewMode] = useState<'builder' | 'results'>('builder')
   const [resultWeekIndex, setResultWeekIndex] = useState(0)
-  const [lastSavedDirectory, setLastSavedDirectory] = useState('')
+  const [lastSavedDirectory, setLastSavedDirectory] = useState(() => initialSavedDirectory || '')
   const [isSavingBase, setIsSavingBase] = useState(false)
   const [downloadStatus, setDownloadStatus] = useState('')
   const contentInputRef = useRef<HTMLInputElement | null>(null)
@@ -1249,6 +1259,32 @@ export default function SchedulerApp({
       prev.includes(arg.event.id) ? prev.filter((id) => id !== arg.event.id) : [...prev, arg.event.id],
     )
     setSelectedRanges([])
+  }
+
+  function syncBlockFromCalendarEvent(event: EventApi) {
+    if (!event.start || !event.end || event.id.startsWith('selected-slot-')) return
+    const oldId = event.id
+    const startIso = isoLocal(event.start)
+    const endIso = isoLocal(event.end)
+    const blockProps = event.extendedProps as Partial<ScheduledBlock>
+    const newId = blockIdForTimes({ id: oldId, episodeId: blockProps.episodeId || oldId }, event.start)
+
+    setBlocks((prev) =>
+      prev.map((block) => {
+        if (block.id !== oldId) return block
+        return {
+          ...block,
+          id: newId,
+          start: startIso,
+          end: endIso,
+        }
+      }),
+    )
+    setSelectedBlockIds((prev) => prev.map((id) => (id === oldId ? newId : id)))
+  }
+
+  function handleEventChange(arg: EventChangeArg) {
+    syncBlockFromCalendarEvent(arg.event)
   }
 
   function eventClassNames(arg: { event: { id: string } }) {
@@ -1574,9 +1610,11 @@ export default function SchedulerApp({
         <div>
           {stationId ? <p className="station-context">Station ID: {stationId}</p> : null}
           <p className="subhead">
-            {fromAutoGenerate
-              ? 'Adjust the auto-generated schedule if needed, then click Save Schedule to save and open the download preview.'
-              : 'Drag across the calendar to highlight time, type a show, then fill the time slots. Click Save Schedule when ready.'}
+            {editingSavedSchedule
+              ? 'Edit the saved schedule on the calendar — move or resize blocks, add or remove shows, then Save Schedule to update the saved files.'
+              : fromAutoGenerate
+                ? 'Adjust the auto-generated schedule if needed, then click Save Schedule to save and open the download preview.'
+                : 'Drag across the calendar to highlight time, type a show, then fill the time slots. Click Save Schedule when ready.'}
           </p>
           <p className="autosave-note">Draft autosaves in this browser while you build.</p>
         </div>
@@ -1717,6 +1755,7 @@ export default function SchedulerApp({
             selectAllow={handleSelectAllow}
             select={handleSelect}
             eventClick={handleEventClick}
+            eventChange={handleEventChange}
             height="72vh"
             expandRows={false}
             nowIndicator={false}
