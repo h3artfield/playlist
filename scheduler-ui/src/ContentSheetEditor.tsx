@@ -12,6 +12,7 @@ export type EditableEpisodeRow = {
   original_airdate: string
   genre: string
   synopsis_long: string
+  playable: boolean
   source_sheet: string
   source_file: string
 }
@@ -34,6 +35,12 @@ function newRowId() {
   return `new-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+function catalogRowIsPlayable(row: { playable?: boolean; availability_status?: string }): boolean {
+  if (row.playable === false) return false
+  if (row.availability_status === 'not_playable') return false
+  return true
+}
+
 export function catalogRowsToEditable(
   showName: string,
   rows: Array<{
@@ -50,6 +57,8 @@ export function catalogRowsToEditable(
     source_sheet?: string
     source_file?: string
     episode_key?: string
+    playable?: boolean
+    availability_status?: string
   }>,
 ): EditableEpisodeRow[] {
   return rows.map((row, index) => ({
@@ -68,6 +77,7 @@ export function catalogRowsToEditable(
     original_airdate: row.original_airdate || '',
     genre: row.genre || row.semantic_group || '',
     synopsis_long: row.synopsis_long || '',
+    playable: catalogRowIsPlayable(row),
     source_sheet: row.source_sheet || '',
     source_file: row.source_file || '',
   }))
@@ -86,6 +96,7 @@ function editableToImportRows(showName: string, rows: EditableEpisodeRow[]) {
     original_airdate: row.original_airdate.trim(),
     genre: row.genre.trim(),
     synopsis_long: row.synopsis_long.trim(),
+    playable: row.playable,
     source_sheet: row.source_sheet,
     source_file: row.source_file || 'schedule_builder',
   }))
@@ -156,6 +167,7 @@ export default function ContentSheetEditor({
         original_airdate: '',
         genre: prev[0]?.genre || '',
         synopsis_long: '',
+        playable: true,
         source_sheet: sourceSheet || prev[0]?.source_sheet || '',
         source_file: prev[0]?.source_file || 'schedule_builder',
       },
@@ -262,6 +274,7 @@ export default function ContentSheetEditor({
               <th>Ep #</th>
               <th>Episode title</th>
               <th>Code</th>
+              <th className="content-sheet-playable-col">Playable</th>
               <th>TRT (min)</th>
               {showSlotColumn ? <th>Slot</th> : null}
               <th>Airdate</th>
@@ -295,6 +308,14 @@ export default function ContentSheetEditor({
                 </td>
                 <td>
                   <input value={row.episode_code} onChange={(e) => updateRow(row.row_id, { episode_code: e.target.value })} />
+                </td>
+                <td className="content-sheet-playable-col">
+                  <input
+                    type="checkbox"
+                    checked={row.playable}
+                    onChange={(e) => updateRow(row.row_id, { playable: e.target.checked })}
+                    aria-label={`Playable: ${row.episode_number || row.episode_title || 'episode'}`}
+                  />
                 </td>
                 <td>
                   <input

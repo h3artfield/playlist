@@ -1769,6 +1769,18 @@
   text-align: center;
 }
 
+.content-sheet-playable-col {
+  width: 72px;
+  text-align: center;
+}
+
+.content-sheet-playable-col input[type='checkbox'] {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  cursor: pointer;
+}
+
 .content-sheet-table tr.content-sheet-row-selected {
   background: rgba(59, 130, 246, 0.08);
 }
