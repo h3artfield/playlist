@@ -1268,10 +1268,13 @@ export default function SchedulerApp({
   }
 
   function handleEventClick(arg: EventClickArg) {
+    blurActiveFormControl()
     setSelectedBlockIds((prev) =>
       prev.includes(arg.event.id) ? prev.filter((id) => id !== arg.event.id) : [...prev, arg.event.id],
     )
     setSelectedRanges([])
+    setLiveSelectionRanges([])
+    setContentMenuOpen(false)
   }
 
   function syncBlockFromCalendarEvent(event: EventApi) {
