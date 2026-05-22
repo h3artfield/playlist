@@ -1052,8 +1052,12 @@ def _auto_generate_blocks(
     cursor_path = base_path.parent / f"episode_cursors_{safe_station}.json"
     episodes_by_show = _catalog_episodes_by_show()
     cursors = _load_auto_cursors(cursor_path)
+    seeded = _seed_cursors_from_template(template_blocks, episodes_by_show)
     if not cursors:
-        cursors = _seed_cursors_from_template(template_blocks, episodes_by_show)
+        cursors = seeded
+    else:
+        for show, index in seeded.items():
+            cursors[show] = max(int(cursors.get(show, 0) or 0), int(index or 0))
 
     generated: list[dict[str, Any]] = []
     for gen_week_index in range(generate_week_count):
@@ -1104,19 +1108,20 @@ def _auto_generate_blocks(
             generated.append(next_block)
 
     generated.sort(key=lambda item: str(item.get("start") or ""))
+    _save_auto_cursors(cursor_path, cursors)
     return generated, next_monday, generate_week_count
 
 
 def _catalog_episodes_by_show() -> dict[str, list[dict[str, Any]]]:
-    payload = _static_catalog_payload()
-    rows: list[dict[str, Any]]
-    if payload is not None and isinstance(payload.get("rows"), list):
-        rows = payload["rows"]
-    else:
-        from binge_schedule.runtime_paths import default_config_path
+    from binge_schedule.content_catalog import canonical_rows_from_config
+    from binge_schedule.runtime_paths import default_config_path
 
-        cfg = load_build_config(default_config_path())
-        rows = canonical_rows_from_config(cfg)
+    cfg = load_build_config(default_config_path())
+    rows = canonical_rows_from_config(cfg)
+    if not rows:
+        static_payload = _static_catalog_payload()
+        if static_payload is not None and isinstance(static_payload.get("rows"), list):
+            rows = static_payload["rows"]
     by_show: dict[str, list[dict[str, Any]]] = {}
     for index, row in enumerate(rows):
         if not isinstance(row, dict):

@@ -289,3 +289,20 @@ def test_load_desktop_config_without_nikki_workbook():
     cfg = load_build_config(Path("config/desktop.yaml"))
     assert cfg.nikki_workbook == ""
     assert cfg.shows == {}
+
+
+def test_seed_cursors_from_template_continues_after_last_episode():
+    from binge_schedule.api import _seed_cursors_from_template
+
+    episodes_by_show = {
+        "The Saint": [
+            {"id": "saint-1", "code": "01_01", "title": "Pilot"},
+            {"id": "saint-2", "code": "01_02", "title": "Part Two"},
+            {"id": "saint-3", "code": "01_03", "title": "Part Three"},
+        ]
+    }
+    template_blocks = [
+        {"show": "The Saint", "episodeId": "saint-2", "episodeCode": "01_02", "contentType": "Series / show"},
+    ]
+    cursors = _seed_cursors_from_template(template_blocks, episodes_by_show)
+    assert cursors["The Saint"] == 2
