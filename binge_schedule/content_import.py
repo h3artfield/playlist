@@ -474,6 +474,76 @@ def _show_match_key(name: str) -> str:
     return _normalize_key(name)
 
 
+def _row_matches_show_key(row: dict[str, Any], show_key: str) -> bool:
+    if not show_key:
+        return False
+    for field in ("display_name", "series_title"):
+        if _show_match_key(str(row.get(field, ""))) == show_key:
+            return True
+    return False
+
+
+def rename_show_catalog(cfg: BuildConfig, display_name: str, new_display_name: str) -> dict[str, Any]:
+    """Rename every imported catalog row for one show/movie/paid title."""
+    old_key = _show_match_key(display_name)
+    new_label = _clean_text(new_display_name)
+    new_key = _show_match_key(new_label)
+    if not old_key:
+        raise ValueError("Current show name is required.")
+    if not new_key:
+        raise ValueError("New show name is required.")
+
+    existing = load_imported_catalog_rows(cfg)
+    if not any(_row_matches_show_key(row, old_key) for row in existing):
+        raise ValueError("Show not found in imported catalog.")
+
+    if old_key != new_key and any(
+        _row_matches_show_key(row, new_key) and not _row_matches_show_key(row, old_key) for row in existing
+    ):
+        raise ValueError(f'A show named "{new_label}" already exists in the catalog.')
+
+    renamed_rows: list[dict[str, Any]] = []
+    renamed_count = 0
+    for row in existing:
+        copy = dict(row)
+        if _row_matches_show_key(copy, old_key):
+            copy["display_name"] = new_label
+            if _normalize_key(copy.get("content_type", "")) in {"series", "show", "episode"}:
+                copy["series_title"] = new_label
+            renamed_count += 1
+        renamed_rows.append(copy)
+
+    save_imported_catalog_rows(cfg, dedupe_import_rows(renamed_rows))
+    catalog_rows, written_paths = publish_content_catalog(cfg)
+    return {
+        "display_name": new_label,
+        "previous_display_name": _clean_text(display_name),
+        "renamed_row_count": renamed_count,
+        "catalog_row_count": len(catalog_rows),
+        "catalog_paths": [path.as_posix() for path in written_paths],
+    }
+
+
+def delete_show_catalog(cfg: BuildConfig, display_name: str) -> dict[str, Any]:
+    """Remove every imported catalog row for one show/movie/paid title."""
+    show_key = _show_match_key(display_name)
+    if not show_key:
+        raise ValueError("Show name is required.")
+    existing = load_imported_catalog_rows(cfg)
+    kept = [row for row in existing if not _row_matches_show_key(row, show_key)]
+    removed = len(existing) - len(kept)
+    if removed == 0:
+        raise ValueError("Show not found in imported catalog.")
+    save_imported_catalog_rows(cfg, kept)
+    catalog_rows, written_paths = publish_content_catalog(cfg)
+    return {
+        "display_name": _clean_text(display_name),
+        "deleted_row_count": removed,
+        "catalog_row_count": len(catalog_rows),
+        "catalog_paths": [path.as_posix() for path in written_paths],
+    }
+
+
 def replace_show_catalog_rows(cfg: BuildConfig, display_name: str, incoming: list[dict[str, Any]]) -> dict[str, Any]:
     """Replace all imported catalog rows for one show (spreadsheet save)."""
     show_key = _show_match_key(display_name)

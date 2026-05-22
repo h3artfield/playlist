@@ -306,3 +306,65 @@ def test_seed_cursors_from_template_continues_after_last_episode():
     ]
     cursors = _seed_cursors_from_template(template_blocks, episodes_by_show)
     assert cursors["The Saint"] == 2
+
+
+def test_rename_and_delete_show_catalog(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from binge_schedule.config_io import load_build_config
+    from binge_schedule.content_import import (
+        delete_show_catalog,
+        load_imported_catalog_rows,
+        rename_show_catalog,
+        save_imported_catalog_rows,
+    )
+    from binge_schedule.runtime_paths import imported_catalog_path
+
+    cfg = load_build_config(Path("config/desktop.yaml"))
+    catalog_path = imported_catalog_path(cfg.config_path)
+    monkeypatch.setattr(
+        "binge_schedule.content_import.imported_catalog_path",
+        lambda *_args, **_kwargs: tmp_path / "imported_content_catalog.json",
+    )
+    monkeypatch.setattr(
+        "binge_schedule.runtime_paths.imported_catalog_path",
+        lambda *_args, **_kwargs: tmp_path / "imported_content_catalog.json",
+    )
+    monkeypatch.setattr("binge_schedule.content_import.catalog_publish_paths", lambda: [])
+
+    save_imported_catalog_rows(
+        cfg,
+        [
+            {
+                "content_type": "series",
+                "display_name": "Old Show",
+                "series_title": "Old Show",
+                "episode_number": "01",
+                "episode_title": "Pilot",
+                "runtime_minutes": 30,
+                "playable": True,
+                "source_sheet": "manual",
+                "source_file": "test",
+            },
+            {
+                "content_type": "movie",
+                "display_name": "Old Movie",
+                "episode_title": "Old Movie",
+                "runtime_minutes": 90,
+                "playable": True,
+                "source_sheet": "manual",
+                "source_file": "test",
+            },
+        ],
+    )
+
+    renamed = rename_show_catalog(cfg, "Old Show", "New Show")
+    assert renamed["renamed_row_count"] == 1
+    rows = load_imported_catalog_rows(cfg)
+    assert {row["display_name"] for row in rows} == {"New Show", "Old Movie"}
+
+    deleted = delete_show_catalog(cfg, "Old Movie")
+    assert deleted["deleted_row_count"] == 1
+    rows = load_imported_catalog_rows(cfg)
+    assert len(rows) == 1
+    assert rows[0]["display_name"] == "New Show"

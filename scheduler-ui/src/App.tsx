@@ -6,7 +6,9 @@ import ContentSheetEditor, { catalogRowsToEditable, SLOT_OPTIONS } from './Conte
 import ImportWizard from './ImportWizard'
 import type { CommitImportResponse } from './contentImportTypes'
 import AutoGenerateConfirmDialog from './AutoGenerateConfirmDialog'
+import DeleteContentDialog from './DeleteContentDialog'
 import DeleteScheduleDialog from './DeleteScheduleDialog'
+import RenameShowDialog from './RenameShowDialog'
 import {
   clearScheduleDraft,
   formatScheduleWeekRange,
@@ -535,6 +537,10 @@ function ArchivePage({ onCatalogChanged }: { onCatalogChanged?: () => void }) {
   const [runtimeMinutes, setRuntimeMinutes] = useState('')
   const [slotMinutes, setSlotMinutes] = useState('')
   const [genre, setGenre] = useState('')
+  const [renameTarget, setRenameTarget] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState('')
+  const [manageBusy, setManageBusy] = useState(false)
+  const [manageError, setManageError] = useState('')
   async function reloadCatalog() {
     const payload = await fetchCatalog<{ rows?: CatalogRow[] }>()
     const nextRows = Array.isArray(payload.rows) ? payload.rows : []
@@ -601,6 +607,63 @@ function ArchivePage({ onCatalogChanged }: { onCatalogChanged?: () => void }) {
         `Imported ${(result.imported_count ?? result.imported_row_count ?? 0).toLocaleString()} row(s)${detail}. Catalog now has ${(result.catalog_row_count ?? 0).toLocaleString()} rows.`,
       )
     })
+  }
+
+  async function confirmRenameShow(newName: string) {
+    if (!renameTarget) return
+    setManageBusy(true)
+    setManageError('')
+    try {
+      const result = await fetchJson<{ display_name?: string; renamed_row_count?: number }>('/api/content/show/rename', {
+        method: 'POST',
+        body: JSON.stringify({
+          display_name: renameTarget,
+          new_display_name: newName,
+        }),
+      })
+      const nextName = result.display_name || newName
+      await reloadCatalog()
+      onCatalogChanged?.()
+      if (expandedName === renameTarget) {
+        setExpandedName(nextName)
+      }
+      setRenameTarget('')
+      setImportStatus(
+        `Renamed to "${nextName}" (${(result.renamed_row_count ?? 0).toLocaleString()} catalog row${result.renamed_row_count === 1 ? '' : 's'} updated).`,
+      )
+    } catch (error) {
+      setManageError(error instanceof Error ? error.message : 'Could not rename content.')
+    } finally {
+      setManageBusy(false)
+    }
+  }
+
+  async function confirmDeleteShow() {
+    if (!deleteTarget) return
+    setManageBusy(true)
+    setManageError('')
+    try {
+      const result = await fetchJson<{ deleted_row_count?: number; catalog_row_count?: number }>(
+        '/api/content/show/delete',
+        {
+          method: 'POST',
+          body: JSON.stringify({ display_name: deleteTarget }),
+        },
+      )
+      if (expandedName === deleteTarget) {
+        setExpandedName('')
+      }
+      setDeleteTarget('')
+      await reloadCatalog()
+      onCatalogChanged?.()
+      setImportStatus(
+        `Removed "${deleteTarget}" (${(result.deleted_row_count ?? 0).toLocaleString()} row${result.deleted_row_count === 1 ? '' : 's'} deleted). Catalog now has ${(result.catalog_row_count ?? 0).toLocaleString()} rows.`,
+      )
+    } catch (error) {
+      setManageError(error instanceof Error ? error.message : 'Could not delete content.')
+    } finally {
+      setManageBusy(false)
+    }
   }
 
   const summary = useMemo(() => {
@@ -795,27 +858,52 @@ function ArchivePage({ onCatalogChanged }: { onCatalogChanged?: () => void }) {
             const first = group[0]
             return (
               <article className="archive-row grouped" key={name}>
-                <button
-                  className="archive-row-header"
-                  type="button"
-                  onClick={() => setExpandedName(isOpen ? '' : name)}
-                >
-                  <span>
-                    <strong>{name}</strong>
-                    <small>
-                      {contentCategoryLabel(category)} · {first.genre || first.semantic_group || 'unlabeled'} ·{' '}
-                      {group.length.toLocaleString()} {category === 'series' ? 'episodes' : 'items'}
-                    </small>
-                  </span>
-                  <b>{isOpen ? 'Hide sheet' : 'Edit sheet'}</b>
-                </button>
+                <div className="archive-row-header">
+                  <button className="archive-row-toggle" type="button" onClick={() => setExpandedName(isOpen ? '' : name)}>
+                    <span>
+                      <strong>{name}</strong>
+                      <small>
+                        {contentCategoryLabel(category)} · {first.genre || first.semantic_group || 'unlabeled'} ·{' '}
+                        {group.length.toLocaleString()} {category === 'series' ? 'episodes' : 'items'}
+                      </small>
+                    </span>
+                    <b>{isOpen ? 'Hide sheet' : 'Edit sheet'}</b>
+                  </button>
+                  <div className="archive-row-actions">
+                    <button
+                      className="ghost-action"
+                      type="button"
+                      disabled={manageBusy}
+                      onClick={() => {
+                        setManageError('')
+                        setRenameTarget(name)
+                      }}
+                    >
+                      Rename
+                    </button>
+                    <button
+                      className="ghost-action danger-action"
+                      type="button"
+                      disabled={manageBusy}
+                      onClick={() => {
+                        setManageError('')
+                        setDeleteTarget(name)
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
                 {isOpen ? (
                   <ContentSheetEditor
                     showName={name}
                     contentType={first.content_type || category}
                     sourceSheet={first.source_sheet}
                     rows={catalogRowsToEditable(name, group)}
-                    onSaved={() => void reloadCatalog()}
+                    onSaved={() => {
+                      void reloadCatalog()
+                      onCatalogChanged?.()
+                    }}
                   />
                 ) : null}
               </article>
@@ -829,6 +917,31 @@ function ArchivePage({ onCatalogChanged }: { onCatalogChanged?: () => void }) {
           ) : null}
         </div>
       </section>
+
+      {manageError ? <p className="panel-status-error">{manageError}</p> : null}
+
+      {renameTarget ? (
+        <RenameShowDialog
+          currentName={renameTarget}
+          busy={manageBusy}
+          onCancel={() => {
+            if (!manageBusy) setRenameTarget('')
+          }}
+          onConfirm={(newName) => void confirmRenameShow(newName)}
+        />
+      ) : null}
+
+      {deleteTarget ? (
+        <DeleteContentDialog
+          label={deleteTarget}
+          detail="Saved schedules are not deleted, but blocks that reference this title will need to be updated manually."
+          busy={manageBusy}
+          onCancel={() => {
+            if (!manageBusy) setDeleteTarget('')
+          }}
+          onConfirm={() => void confirmDeleteShow()}
+        />
+      ) : null}
     </main>
   )
 }

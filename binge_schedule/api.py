@@ -104,6 +104,15 @@ class UpdateShowRowsPayload(BaseModel):
     rows: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class RenameShowPayload(BaseModel):
+    display_name: str = ""
+    new_display_name: str = ""
+
+
+class ShowDisplayNamePayload(BaseModel):
+    display_name: str = ""
+
+
 class ImportPreviewSheetConfig(BaseModel):
     sheet_name: str
     include: bool = True
@@ -292,6 +301,28 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="display_name is required")
         try:
             return replace_show_catalog_rows(cfg, payload.display_name.strip(), payload.rows)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/content/show/rename")
+    def rename_show(payload: RenameShowPayload, config: str = str(DEFAULT_CONFIG)) -> dict[str, Any]:
+        from binge_schedule.content_import import rename_show_catalog
+
+        cfg_path = _safe_config_path(config)
+        cfg = load_build_config(cfg_path)
+        try:
+            return rename_show_catalog(cfg, payload.display_name, payload.new_display_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/content/show/delete")
+    def delete_show(payload: ShowDisplayNamePayload, config: str = str(DEFAULT_CONFIG)) -> dict[str, Any]:
+        from binge_schedule.content_import import delete_show_catalog
+
+        cfg_path = _safe_config_path(config)
+        cfg = load_build_config(cfg_path)
+        try:
+            return delete_show_catalog(cfg, payload.display_name)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
