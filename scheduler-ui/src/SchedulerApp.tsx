@@ -351,6 +351,33 @@ function formatClock(value: Date): string {
   return value.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
+const BINGE_WEEKDAY_ABBR = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+function formatBingeDate(value: Date): string {
+  const weekday = BINGE_WEEKDAY_ABBR[(value.getDay() + 6) % 7]
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${weekday}, ${pad(value.getMonth() + 1)}/${pad(value.getDate())}/${value.getFullYear()}`
+}
+
+function formatBingeTime(value: Date): string {
+  return `${value.getHours()}:${String(value.getMinutes()).padStart(2, '0')}`
+}
+
+function bingeEpisodeNumberFromBlock(block: ScheduledBlock): string {
+  const code = (block.episodeCode || '').trim()
+  const rawUpper = code.toUpperCase()
+  if (rawUpper === 'MOVIE' || rawUpper === 'PAID' || rawUpper === 'LIT') return rawUpper
+  if (code.includes('_')) {
+    const tail = code.split('_').pop() || ''
+    if (/^\d+$/.test(tail)) return String(Number(tail))
+    return tail
+  }
+  if (/^\d+$/.test(code)) return String(Number(code))
+  const digits = code.match(/\d+/g)
+  if (digits?.length) return String(Number(digits[digits.length - 1]))
+  return ''
+}
+
 function formatShortDate(value: Date): string {
   return value.toLocaleDateString([], { weekday: 'short', month: 'numeric', day: 'numeric' })
 }
@@ -1497,31 +1524,28 @@ export default function SchedulerApp({
               <table className="report-table">
                 <thead>
                   <tr>
-                    <th>Date</th>
-                    <th>Start</th>
-                    <th>End</th>
-                    <th>Show</th>
-                    <th>Episode</th>
-                    <th>Slot</th>
-                    <th>Runtime</th>
-                    <th>Avails</th>
+                    <th>DATE</th>
+                    <th>START TIME</th>
+                    <th>FINISH TIME</th>
+                    <th>EPISODE</th>
+                    <th>SHOW</th>
+                    <th>EPISODE #</th>
+                    <th>EPISODE NAME</th>
                   </tr>
                 </thead>
                 <tbody>
                   {resultBlocks.map((block) => {
                     const start = new Date(block.start)
                     const end = new Date(block.end)
-                    const slotMinutes = minutesBetween(start, end)
                     return (
                       <tr key={block.id}>
-                        <td>{formatShortDate(start)}</td>
-                        <td>{formatClock(start)}</td>
-                        <td>{formatClock(end)}</td>
+                        <td>{formatBingeDate(start)}</td>
+                        <td>{formatBingeTime(start)}</td>
+                        <td>{formatBingeTime(end)}</td>
+                        <td>{block.episodeCode}</td>
                         <td>{block.show}</td>
-                        <td>{episodeLabelFromBlock(block)}</td>
-                        <td>{slotMinutes} min</td>
-                        <td>{formatRuntimeMinutes(block.runtimeMinutes)}</td>
-                        <td>{formatRuntimeMinutes(Math.max(0, slotMinutes - block.runtimeMinutes))}</td>
+                        <td>{bingeEpisodeNumberFromBlock(block)}</td>
+                        <td>{block.episodeTitle}</td>
                       </tr>
                     )
                   })}

@@ -348,6 +348,86 @@ def binge_rows_to_dataframe(rows: list[BingeRow]) -> pd.DataFrame:
     )
 
 
+def _parse_block_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _report_time_label(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    return f"{value.hour}:{value.minute:02d}"
+
+
+def _report_episode_fields(block: dict[str, Any]) -> tuple[str, Any, str]:
+    code = str(block.get("episodeCode") or block.get("episode_code") or "").strip()
+    title = str(block.get("episodeTitle") or block.get("episode_title") or "").strip()
+    episode_num: Any = block.get("episodeNumber")
+    if episode_num is None:
+        episode_num = block.get("episode_number")
+    if episode_num is None or str(episode_num).strip() == "":
+        raw_upper = code.upper()
+        if raw_upper in {"MOVIE", "PAID", "LIT"}:
+            episode_num = raw_upper
+        elif "_" in code:
+            tail = code.rsplit("_", 1)[-1]
+            episode_num = int(tail.lstrip("0") or tail) if tail.isdigit() else tail
+        elif code.isdigit():
+            episode_num = int(code.lstrip("0") or code)
+        else:
+            matches = re.findall(r"\d+", code)
+            if matches:
+                tail = matches[-1]
+                episode_num = int(tail.lstrip("0") or tail)
+            else:
+                episode_num = ""
+    elif str(episode_num).strip().isdigit():
+        digits = str(episode_num).strip()
+        episode_num = int(digits.lstrip("0") or digits)
+    return code, episode_num, title
+
+
+def blocks_to_binge_dataframe(blocks: list[dict[str, Any]]) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for block in sorted(blocks, key=lambda item: str(item.get("start") or "")):
+        start = _parse_block_datetime(block.get("start"))
+        end = _parse_block_datetime(block.get("end"))
+        if start is None:
+            continue
+        episode, episode_num, episode_name = _report_episode_fields(block)
+        rows.append(
+            {
+                "DATE": start.date(),
+                "START TIME": _report_time_label(start),
+                "FINISH TIME ": _report_time_label(end),
+                "EPISODE": episode,
+                "SHOW": str(block.get("show") or ""),
+                "EPISODE #": episode_num,
+                "EPISODE NAME ": episode_name,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_binge_preview_workbook_bytes(blocks: list[dict[str, Any]], *, sheet_title: str = "Schedule") -> bytes:
+    from io import BytesIO
+
+    df = blocks_to_binge_dataframe(blocks)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_title[:31] or "Schedule"
+    _write_binge_sheet(ws, df)
+    out = BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
 def _binge_date_display(d: Any) -> str:
     if hasattr(d, "date"):
         d = d.date()

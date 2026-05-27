@@ -746,35 +746,9 @@ def _save_builder_base_schedule(
 
 
 def _build_binge_preview_workbook(blocks: list[dict[str, Any]], *, station_id: str = "") -> bytes:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = _station_label(station_id)[:31]
-    headers = ["Station ID", "Date", "Start", "End", "Show", "Episode", "Slot", "Runtime", "Avails"]
-    ws.append(headers)
-    for cell in ws[1]:
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal="left")
-    for block in sorted(blocks, key=lambda item: str(item.get("start") or "")):
-        start = _parse_iso_datetime(block.get("start"))
-        end = _parse_iso_datetime(block.get("end"))
-        slot_minutes = _minutes_between(start, end)
-        runtime = _float_or_none(block.get("runtimeMinutes") or block.get("runtime_minutes"))
-        episode = _episode_label(block)
-        ws.append(
-            [
-                station_id,
-                start.date().isoformat() if start else "",
-                _clock_label(start),
-                _clock_label(end),
-                str(block.get("show") or ""),
-                episode,
-                f"{slot_minutes} min" if slot_minutes is not None else "",
-                _duration_label(runtime),
-                _duration_label(max(0, slot_minutes - runtime)) if slot_minutes is not None and runtime is not None else "",
-            ]
-        )
-    _autosize_columns(ws)
-    return _workbook_bytes(wb)
+    from binge_schedule.export_xlsx import build_binge_preview_workbook_bytes
+
+    return build_binge_preview_workbook_bytes(blocks, sheet_title=_station_label(station_id))
 
 
 def _build_grids_preview_workbook(
