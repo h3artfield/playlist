@@ -1074,11 +1074,22 @@ export default function SchedulerApp({
     }
     return inferredStartingEpisode
   }, [allEpisodesForShow, inferredStartingEpisode, startingEpisodeId])
+  const chosenMovieEpisode = useMemo(() => {
+    if (!matchingShow || contentMode !== 'movies') return null
+    const pool = allEpisodesForShow.filter(isMovieEpisode)
+    if (!pool.length) return null
+    const fitting = pool.filter((ep) => episodeFitsSelection(ep, selectedRangeDurations))
+    if (startingEpisodeId) {
+      return pool.find((ep) => ep.id === startingEpisodeId) ?? fitting[0] ?? pool[0]
+    }
+    return fitting[0] ?? pool[0] ?? null
+  }, [allEpisodesForShow, contentMode, matchingShow, selectedRangeDurations, startingEpisodeId])
+  const effectiveCommitEpisode = contentMode === 'movies' ? chosenMovieEpisode : chosenStartingEpisode
   const canCommitFill = Boolean(
     selectedRanges.length &&
       matchingShow &&
-      chosenStartingEpisode &&
-      episodeFitsSelection(chosenStartingEpisode, selectedRangeDurations),
+      effectiveCommitEpisode &&
+      episodeFitsSelection(effectiveCommitEpisode, selectedRangeDurations),
   )
   const selectedMovieBlock = useMemo(() => {
     if (selectedBlockIds.length !== 1) return null
@@ -1086,8 +1097,9 @@ export default function SchedulerApp({
     if (!block || block.contentType !== 'Movie / special') return null
     return block
   }, [blocks, selectedBlockIds])
+  const showSeriesEpisodePicker = contentMode === 'series' && Boolean(matchingShow && selectedRanges.length)
   const showMovieTitleStartPicker = Boolean(
-    selectedMovieBlock || (canCommitFill && chosenStartingEpisode && isMovieEpisode(chosenStartingEpisode)),
+    selectedMovieBlock || (contentMode === 'movies' && matchingShow && selectedRanges.length),
   )
   const movieTitleStartBlockStart = selectedMovieBlock
     ? new Date(selectedMovieBlock.start)
@@ -1228,7 +1240,10 @@ export default function SchedulerApp({
   })
 
   function fillSelectedRange() {
-    const startEpisodeId = startingEpisodeId || inferredStartingEpisode?.id || ''
+    const startEpisodeId =
+      contentMode === 'movies'
+        ? chosenMovieEpisode?.id || ''
+        : startingEpisodeId || inferredStartingEpisode?.id || ''
     if (!selectedRanges.length || !matchingShow || !startEpisodeId) return
     const episodePool = allEpisodesForShow
     const startIndex = episodePool.findIndex((ep) => ep.id === startEpisodeId)
@@ -1997,45 +2012,43 @@ export default function SchedulerApp({
               </div>
               <span className="picker-note">
                 Showing {filteredShows.length.toLocaleString()} of {shows.length.toLocaleString()} content items
-                {selectedRangeDurations.length ? ' with episodes that fit your selection' : ''}
+                {contentMode === 'series' && selectedRangeDurations.length ? ' with episodes that fit your selection' : ''}
               </span>
             </label>
 
-            <label>
-              Starting episode
-              <select
-                value={startingEpisodeId}
-                onChange={(event) => setStartingEpisodeId(event.target.value)}
-                disabled={!matchingShow}
-              >
-                <option value="">
-                  {inferredStartingEpisode ? `Auto: ${inferredStartingEpisode.code} - ${inferredStartingEpisode.title}` : 'Select episode'}
-                </option>
-                {allEpisodesForShow.map((ep) => {
-                  const fits = episodeFitsSelection(ep, selectedRangeDurations)
-                  return (
-                    <option key={ep.id} value={ep.id} disabled={!fits}>
-                      {ep.code} — {ep.title}
-                      {!fits ? ` (needs ${slotRequirementLabel(ep.durationMinutes)})` : ''}
-                      {fits && movieNeedsTimingNote(ep, selectedSlotMinutes) ? ' (needs timing note)' : ''}
-                    </option>
-                  )
-                })}
-              </select>
-              {inferredStartingEpisode && !startingEpisodeId ? (
-                <span className="picker-note">
-                  Will continue with {inferredStartingEpisode.code} — {inferredStartingEpisode.title}
-                </span>
-              ) : null}
-              {allEpisodesForShow.some((ep) => !episodeFitsSelection(ep, selectedRangeDurations)) ? (
-                <span className="picker-note">
-                  Some episodes need a larger slot than you selected (for example a 2-hour pilot needs a 2-hour block).
-                </span>
-              ) : null}
-              {episodesForShow.some((ep) => movieNeedsTimingNote(ep, selectedSlotMinutes)) ? (
-                <span className="picker-note">Some movies fit by runtime but need a title-start timing note.</span>
-              ) : null}
-            </label>
+            {showSeriesEpisodePicker ? (
+              <label>
+                Starting episode
+                <select
+                  value={startingEpisodeId}
+                  onChange={(event) => setStartingEpisodeId(event.target.value)}
+                  disabled={!matchingShow}
+                >
+                  <option value="">
+                    {inferredStartingEpisode ? `Auto: ${inferredStartingEpisode.code} - ${inferredStartingEpisode.title}` : 'Select episode'}
+                  </option>
+                  {allEpisodesForShow.map((ep) => {
+                    const fits = episodeFitsSelection(ep, selectedRangeDurations)
+                    return (
+                      <option key={ep.id} value={ep.id} disabled={!fits}>
+                        {ep.code} — {ep.title}
+                        {!fits ? ` (needs ${slotRequirementLabel(ep.durationMinutes)})` : ''}
+                      </option>
+                    )
+                  })}
+                </select>
+                {inferredStartingEpisode && !startingEpisodeId ? (
+                  <span className="picker-note">
+                    Will continue with {inferredStartingEpisode.code} — {inferredStartingEpisode.title}
+                  </span>
+                ) : null}
+                {allEpisodesForShow.some((ep) => !episodeFitsSelection(ep, selectedRangeDurations)) ? (
+                  <span className="picker-note">
+                    Some episodes need a larger slot than you selected (for example a 2-hour pilot needs a 2-hour block).
+                  </span>
+                ) : null}
+              </label>
+            ) : null}
 
             {showMovieTitleStartPicker && movieTitleStartBlockStart ? (
               <label>
@@ -2051,10 +2064,18 @@ export default function SchedulerApp({
                     </option>
                   ))}
                 </select>
-                <span className="picker-note">
-                  Optional. When set, the Report shows <strong>STARTS AT</strong> in bold and Warnings and Notes lists the title time.
-                </span>
+                {chosenMovieEpisode && movieNeedsTimingNote(chosenMovieEpisode, selectedSlotMinutes) ? (
+                  <span className="picker-note">
+                    {chosenMovieEpisode.title} fits this slot by runtime, but pick a title start time if commercials push the open later than the block start.
+                  </span>
+                ) : (
+                  <span className="picker-note">
+                    Optional. When set, the Report shows <strong>STARTS AT</strong> in bold and Warnings and Notes lists the title time.
+                  </span>
+                )}
               </label>
+            ) : contentMode === 'movies' && selectedRanges.length && !matchingShow ? (
+              <p className="picker-note muted">Choose a movie above, then set the title start time.</p>
             ) : null}
 
             <button
