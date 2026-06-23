@@ -45,6 +45,10 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Name: "{app}\saved_schedules"; Permissions: users-modify; Flags: uninsneveruninstall
 Name: "{app}\logs"; Permissions: users-modify; Flags: uninsneveruninstall
 
+[InstallDelete]
+; Upgrades must not leave stale hashed JS/CSS that WebView2 can load from an old cached index.html.
+Type: filesandordirs; Name: "{app}\_internal\scheduler-ui\dist\assets"
+
 [Files]
 ; Replace shipped app files only. Do not bundle saved_schedules/ or logs/ from the build output.
 Source: "..\..\dist\ScheduleBuilder\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "saved_schedules\*,logs\*"

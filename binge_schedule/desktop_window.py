@@ -10,7 +10,13 @@ import urllib.request
 from typing import Any
 
 
-def api_health_ok(base_url: str, *, timeout: float = 0.75, expected_version: str = "") -> bool:
+def api_health_ok(
+    base_url: str,
+    *,
+    timeout: float = 0.75,
+    expected_version: str = "",
+    expected_ui_version: str = "",
+) -> bool:
     import json
 
     health_url = f"{base_url.rstrip('/')}/api/health"
@@ -24,6 +30,8 @@ def api_health_ok(base_url: str, *, timeout: float = 0.75, expected_version: str
                 return False
             if expected_version and str(payload.get("app_version") or "") != expected_version:
                 return False
+            if expected_ui_version and str(payload.get("ui_bundle_version") or "") != expected_ui_version:
+                return False
             return True
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, TypeError, ValueError):
         return False
@@ -35,15 +43,29 @@ def port_is_listening(host: str, port: int) -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
-def pick_api_port(*, preferred: int = 8765, span: int = 20, expected_version: str = "") -> int:
+def pick_api_port(
+    *,
+    preferred: int = 8765,
+    span: int = 20,
+    expected_version: str = "",
+    expected_ui_version: str = "",
+) -> int:
     """Reuse a healthy API with the same version, or pick the first free port."""
     host = "127.0.0.1"
-    if api_health_ok(f"http://{host}:{preferred}", expected_version=expected_version):
+    if api_health_ok(
+        f"http://{host}:{preferred}",
+        expected_version=expected_version,
+        expected_ui_version=expected_ui_version,
+    ):
         return preferred
     if not port_is_listening(host, preferred):
         return preferred
     for port in range(preferred + 1, preferred + span):
-        if api_health_ok(f"http://{host}:{port}", expected_version=expected_version):
+        if api_health_ok(
+            f"http://{host}:{port}",
+            expected_version=expected_version,
+            expected_ui_version=expected_ui_version,
+        ):
             return port
         if not port_is_listening(host, port):
             return port

@@ -60,13 +60,29 @@ if (Test-Path "$Root\scheduler-ui\package.json") {
     }
     $uiJs = Get-ChildItem "dist/assets/*.js" -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $uiJs) { throw "React UI build did not produce dist/assets/*.js." }
-    if (-not (Select-String -Path $uiJs.FullName -Pattern "Title start time" -Quiet)) {
-        throw "React UI bundle is missing the movie Title start time control."
+    if (-not (Select-String -Path $uiJs.FullName -Pattern "Start time" -Quiet)) {
+        throw "React UI bundle is missing the movie Start time control."
     }
     if (Select-String -Path $uiJs.FullName -Pattern "Some movies fit by runtime but need a title-start timing note" -Quiet) {
         throw "React UI bundle still contains the removed movie timing-note sidebar text."
     }
-    Write-Host "React UI built: dist/index.html (verified movie title-start UI)"
+    Write-Host "React UI built: dist/index.html (verified movie Start time UI)"
+
+    $indexHtml = "$Root\scheduler-ui\dist\index.html"
+    $html = Get-Content $indexHtml -Raw
+    $html = $html -replace '<title>Schedule Builder</title>', "<title>Schedule Builder $AppVersion</title>"
+    $html = $html -replace '(src="/assets/[^"]+\.js")', "`$1?v=$AppVersion"
+    $html = $html -replace '(href="/assets/[^"]+\.css")', "`$1?v=$AppVersion"
+    Set-Content -Encoding utf8 $indexHtml $html
+    Write-Host "Stamped scheduler-ui/dist/index.html with version $AppVersion"
+
+    $splashHtml = "$Root\scheduler-ui\dist\splash.html"
+    if (Test-Path $splashHtml) {
+        $splash = Get-Content $splashHtml -Raw
+        $splash = $splash -replace 'SCHEDULE_BUILDER_UI_VERSION', $AppVersion
+        Set-Content -Encoding utf8 $splashHtml $splash
+        Write-Host "Stamped scheduler-ui/dist/splash.html with version $AppVersion"
+    }
     Pop-Location
 } else {
     throw "scheduler-ui/package.json not found; cannot build desktop app."
@@ -129,13 +145,13 @@ if (-not (Test-Path $bundledReact)) {
 Write-Host "Verified bundled React UI: $bundledReact"
 $bundledUiJs = Get-ChildItem "$distApp\_internal\scheduler-ui\dist\assets\*.js" -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $bundledUiJs) { throw "Bundled React UI is missing dist/assets/*.js." }
-if (-not (Select-String -Path $bundledUiJs.FullName -Pattern "Title start time" -Quiet)) {
-    throw "Bundled React UI is missing the movie Title start time control."
+if (-not (Select-String -Path $bundledUiJs.FullName -Pattern "Start time" -Quiet)) {
+    throw "Bundled React UI is missing the movie Start time control."
 }
 if (Select-String -Path $bundledUiJs.FullName -Pattern "Some movies fit by runtime but need a title-start timing note" -Quiet) {
     throw "Bundled React UI still contains the removed movie timing-note sidebar text."
 }
-Write-Host "Verified bundled React UI assets include movie title-start picker."
+Write-Host "Verified bundled React UI assets include movie Start time picker."
 if (Test-Path $iconIco) {
     Copy-Item $iconIco $distApp -Force
     Write-Host "Copied ScheduleBuilder.ico for shortcuts and shell icon refresh."
@@ -156,18 +172,6 @@ Write-Host ""
 Write-Host "Desktop bundle created at: $distApp"
 $AppVersion | Set-Content -Encoding ascii "$distApp\VERSION.txt"
 Write-Host "Wrote VERSION.txt ($AppVersion)"
-$indexHtml = "$Root\scheduler-ui\dist\index.html"
-if (Test-Path $indexHtml) {
-    $html = Get-Content $indexHtml -Raw
-    $html = $html -replace '<title>Schedule Builder</title>', "<title>Schedule Builder $AppVersion</title>"
-    if ($html -notmatch 'schedule-builder-version') {
-        $html = $html -replace '</head>', "    <meta name=`"schedule-builder-version`" content=`"$AppVersion`" />`n  </head>"
-    } else {
-        $html = $html -replace 'content="[^"]*"(\s*/>\s*<!-- schedule-builder-version -->|"\s*/>)', "content=`"$AppVersion`"`" />"
-    }
-    Set-Content -Encoding utf8 $indexHtml $html
-    Write-Host "Stamped scheduler-ui/dist/index.html with version $AppVersion"
-}
 if ($Demo) {
     Write-Host "Demo install includes station TEST week at saved_schedules/test/2026-05-19_21-33-48"
 }

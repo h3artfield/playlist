@@ -46,7 +46,8 @@
       function openApp() {
         if (opened) return
         opened = true
-        window.location.replace('/')
+        const versionQuery = `v=${encodeURIComponent('SCHEDULE_BUILDER_UI_VERSION')}`
+        window.location.replace(`/?${versionQuery}`)
       }
 
       async function waitForApi() {

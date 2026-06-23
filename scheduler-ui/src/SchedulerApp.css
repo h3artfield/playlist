@@ -382,8 +382,13 @@ select:focus {
   cursor: pointer;
 }
 
-.content-mode-toggle button.active,
 .content-mode-toggle button:hover {
+  color: var(--sb-text);
+  border-color: rgba(96, 165, 250, 0.28);
+  background: rgba(96, 165, 250, 0.12);
+}
+
+.content-mode-toggle button.active {
   color: var(--sb-on-accent);
   border-color: rgba(96, 165, 250, 0.4);
   background: var(--sb-accent-gradient);

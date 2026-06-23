@@ -2005,7 +2005,7 @@ export default function SchedulerApp({
             )}
           </div>
 
-          <div className="panel-section">
+          <div className="panel-section" data-content-mode={contentMode} data-ui-version={bundleVersion}>
             <div className="content-mode-toggle" aria-label="Content type">
               <button className={contentMode === 'series' ? 'active' : ''} type="button" onClick={() => changeContentMode('series')}>
                 Series
@@ -2068,7 +2068,7 @@ export default function SchedulerApp({
 
             {showMovieTitleStartPicker ? (
               <label>
-                Title start time
+                Start time
                 <select
                   value={movieTitleStartSelectValue}
                   disabled={!movieTitleStartBlockStart}
@@ -2076,7 +2076,7 @@ export default function SchedulerApp({
                 >
                   <option value="">
                     {movieTitleStartBlockStart
-                      ? `On the block start (${formatClock(movieTitleStartBlockStart)})`
+                      ? formatClock(movieTitleStartBlockStart)
                       : 'Select a time slot first'}
                   </option>
                   {movieTitleStartBlockStart
@@ -2089,13 +2089,9 @@ export default function SchedulerApp({
                 </select>
                 {!movieTitleStartBlockStart ? (
                   <span className="picker-note">Drag a time slot on the calendar first.</span>
-                ) : chosenMovieEpisode && movieNeedsTimingNote(chosenMovieEpisode, selectedSlotMinutes) ? (
-                  <span className="picker-note">
-                    {chosenMovieEpisode.title} fits this slot by runtime, but pick a title start time if commercials push the open later than the block start.
-                  </span>
                 ) : (
                   <span className="picker-note">
-                    Optional. When set, the Report shows <strong>STARTS AT</strong> in bold and Warnings and Notes lists the title time.
+                    Defaults to the block start. Choose +5 through +25 minutes if the movie title starts later.
                   </span>
                 )}
               </label>

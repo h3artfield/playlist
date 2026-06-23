@@ -90,16 +90,27 @@ def _run_react_api_server(port: int) -> None:
 def _prepare_api(logf) -> str:
     """Pick a port and start the API in the background. The UI opens immediately."""
     from binge_schedule.desktop_window import api_health_ok, pick_api_port
-    from binge_schedule.runtime_paths import desktop_app_version
+    from binge_schedule.runtime_paths import desktop_app_version, react_dist_bundle_version, react_dist_path
 
     expected_version = desktop_app_version()
-    port = pick_api_port(preferred=API_PORT, expected_version=expected_version)
+    expected_ui_version = react_dist_bundle_version(react_dist_path())
+    port = pick_api_port(
+        preferred=API_PORT,
+        expected_version=expected_version,
+        expected_ui_version=expected_ui_version,
+    )
     base_url = f"http://{API_HOST}:{port}"
     logf.write(f"API port: {port}\n")
     if expected_version:
         logf.write(f"Expected app version: {expected_version}\n")
+    if expected_ui_version:
+        logf.write(f"Expected UI bundle version: {expected_ui_version}\n")
 
-    if api_health_ok(base_url, expected_version=expected_version):
+    if api_health_ok(
+        base_url,
+        expected_version=expected_version,
+        expected_ui_version=expected_ui_version,
+    ):
         logf.write(f"Reusing API already listening on port {port}.\n")
         return base_url
 
