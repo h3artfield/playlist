@@ -41,7 +41,7 @@ The installer shows `legal/EULA.txt` on the standard Inno Setup license page (`L
 
 ## One-time setup
 
-Version number lives in `packaging/windows/app_version.txt` (currently **1.0.56**). The build script writes `app_version.inc` for Inno Setup and `VERSION.txt` into the desktop bundle.
+Version number lives in `packaging/windows/app_version.txt` (currently **1.0.57**). The build script writes `app_version.inc` for Inno Setup and `VERSION.txt` into the desktop bundle.
 
 1. Keep installer asset name as `ScheduleBuilderSetup.exe`
 2. Publish it to GitHub Releases

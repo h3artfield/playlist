@@ -963,6 +963,7 @@ export default function SchedulerApp({
   const [startingEpisodeId, setStartingEpisodeId] = useState('')
   const [contentMode, setContentMode] = useState<'series' | 'movies'>('series')
   const [pendingMovieTitleStartOffset, setPendingMovieTitleStartOffset] = useState(0)
+  const [appVersion, setAppVersion] = useState('')
   const [startDate, setStartDate] = useState(() => initialDraft?.startDate || '2026-05-18')
   const [firstDayOfWeek, setFirstDayOfWeek] = useState(() => initialDraft?.firstDayOfWeek || 'Monday')
   const [startTimeHour, setStartTimeHour] = useState(() => initialDraft?.startTimeHour ?? 0)
@@ -1097,10 +1098,7 @@ export default function SchedulerApp({
     if (!block || block.contentType !== 'Movie / special') return null
     return block
   }, [blocks, selectedBlockIds])
-  const showSeriesEpisodePicker = contentMode === 'series' && Boolean(matchingShow && selectedRanges.length)
-  const showMovieTitleStartPicker = Boolean(
-    selectedMovieBlock || (contentMode === 'movies' && matchingShow && selectedRanges.length),
-  )
+  const isMoviePanel = contentMode === 'movies' || Boolean(selectedMovieBlock)
   const movieTitleStartBlockStart = selectedMovieBlock
     ? new Date(selectedMovieBlock.start)
     : selectedRange?.start || null
@@ -1161,6 +1159,12 @@ export default function SchedulerApp({
     }
     return { totalMinutes, filledMinutes, byType, byGenre }
   }, [blocks, scheduleLengthWeeks])
+
+  useEffect(() => {
+    fetchJson<{ app_version?: string }>('/api/health')
+      .then((payload) => setAppVersion(String(payload.app_version || '').trim()))
+      .catch(() => setAppVersion(''))
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -1576,7 +1580,14 @@ export default function SchedulerApp({
       <main className="scheduler-shell">
         <header className="topbar">
           <div>
-            {stationId ? <p className="station-context">Station ID: {stationId}</p> : null}
+            {stationId ? (
+              <p className="station-context">
+                Station ID: {stationId}
+                {appVersion ? ` · v${appVersion}` : ''}
+              </p>
+            ) : appVersion ? (
+              <p className="station-context">Schedule Builder v{appVersion}</p>
+            ) : null}
             <p className="subhead">Review the schedule report, grid preview, and warnings. Go back to adjust, or download the files.</p>
           </div>
           <div className="topbar-actions">
@@ -1747,7 +1758,14 @@ export default function SchedulerApp({
     <main className="scheduler-shell">
       <header className="topbar">
         <div>
-          {stationId ? <p className="station-context">Station ID: {stationId}</p> : null}
+          {stationId ? (
+            <p className="station-context">
+              Station ID: {stationId}
+              {appVersion ? ` · v${appVersion}` : ''}
+            </p>
+          ) : appVersion ? (
+            <p className="station-context">Schedule Builder v{appVersion}</p>
+          ) : null}
           <p className="subhead">
             {editingSavedSchedule
               ? 'Edit the saved schedule on the calendar — move or resize blocks, add or remove shows, then Save Schedule to update the saved files.'
@@ -2016,7 +2034,40 @@ export default function SchedulerApp({
               </span>
             </label>
 
-            {showSeriesEpisodePicker ? (
+            {isMoviePanel ? (
+              <label>
+                Title start time
+                <select
+                  value={movieTitleStartSelectValue}
+                  disabled={!movieTitleStartBlockStart}
+                  onChange={(event) => updateMovieTitleStartOffset(Number(event.target.value) || 0)}
+                >
+                  <option value="">
+                    {movieTitleStartBlockStart
+                      ? `On the block start (${formatClock(movieTitleStartBlockStart)})`
+                      : 'Select a time slot first'}
+                  </option>
+                  {movieTitleStartBlockStart
+                    ? titleStartOptionsForBlockStart(movieTitleStartBlockStart).map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))
+                    : null}
+                </select>
+                {!movieTitleStartBlockStart ? (
+                  <span className="picker-note">Drag a time slot on the calendar first.</span>
+                ) : chosenMovieEpisode && movieNeedsTimingNote(chosenMovieEpisode, selectedSlotMinutes) ? (
+                  <span className="picker-note">
+                    {chosenMovieEpisode.title} fits this slot by runtime, but pick a title start time if commercials push the open later than the block start.
+                  </span>
+                ) : (
+                  <span className="picker-note">
+                    Optional. When set, the Report shows <strong>STARTS AT</strong> in bold and Warnings and Notes lists the title time.
+                  </span>
+                )}
+              </label>
+            ) : matchingShow && selectedRanges.length ? (
               <label>
                 Starting episode
                 <select
@@ -2048,34 +2099,6 @@ export default function SchedulerApp({
                   </span>
                 ) : null}
               </label>
-            ) : null}
-
-            {showMovieTitleStartPicker && movieTitleStartBlockStart ? (
-              <label>
-                Title start time
-                <select
-                  value={movieTitleStartSelectValue}
-                  onChange={(event) => updateMovieTitleStartOffset(Number(event.target.value) || 0)}
-                >
-                  <option value="">On the block start ({formatClock(movieTitleStartBlockStart)})</option>
-                  {titleStartOptionsForBlockStart(movieTitleStartBlockStart).map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                {chosenMovieEpisode && movieNeedsTimingNote(chosenMovieEpisode, selectedSlotMinutes) ? (
-                  <span className="picker-note">
-                    {chosenMovieEpisode.title} fits this slot by runtime, but pick a title start time if commercials push the open later than the block start.
-                  </span>
-                ) : (
-                  <span className="picker-note">
-                    Optional. When set, the Report shows <strong>STARTS AT</strong> in bold and Warnings and Notes lists the title time.
-                  </span>
-                )}
-              </label>
-            ) : contentMode === 'movies' && selectedRanges.length && !matchingShow ? (
-              <p className="picker-note muted">Choose a movie above, then set the title start time.</p>
             ) : null}
 
             <button

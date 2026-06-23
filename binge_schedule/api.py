@@ -14,6 +14,15 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
+
+
+class NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        return response
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, Side
 from pydantic import BaseModel, Field
@@ -613,7 +622,8 @@ def create_app() -> FastAPI:
     _register_splash_routes(app)
     ui_dist = _ui_dist_path()
     if ui_dist is not None:
-        app.mount("/", StaticFiles(directory=ui_dist, html=True), name="scheduler-ui")
+        static_files = NoCacheStaticFiles if os.environ.get("SCHEDULE_BUILDER_DESKTOP_RUNTIME") == "1" else StaticFiles
+        app.mount("/", static_files(directory=ui_dist, html=True), name="scheduler-ui")
 
     return app
 

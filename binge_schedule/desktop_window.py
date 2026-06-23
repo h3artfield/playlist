@@ -10,15 +10,22 @@ import urllib.request
 from typing import Any
 
 
-def api_health_ok(base_url: str, *, timeout: float = 0.75) -> bool:
+def api_health_ok(base_url: str, *, timeout: float = 0.75, expected_version: str = "") -> bool:
+    import json
+
     health_url = f"{base_url.rstrip('/')}/api/health"
     try:
         with urllib.request.urlopen(health_url, timeout=timeout) as response:
             if response.status != 200:
                 return False
-            body = response.read(400).decode("utf-8", errors="ignore")
-            return '"status"' in body and '"ok"' in body
-    except (urllib.error.URLError, TimeoutError, OSError):
+            body = response.read(800).decode("utf-8", errors="ignore")
+            payload = json.loads(body)
+            if payload.get("status") != "ok":
+                return False
+            if expected_version and str(payload.get("app_version") or "") != expected_version:
+                return False
+            return True
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, TypeError, ValueError):
         return False
 
 
@@ -28,19 +35,19 @@ def port_is_listening(host: str, port: int) -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
-def pick_api_port(*, preferred: int = 8765, span: int = 20) -> int:
-    """Reuse a healthy API or pick the first free port (fast scan)."""
+def pick_api_port(*, preferred: int = 8765, span: int = 20, expected_version: str = "") -> int:
+    """Reuse a healthy API with the same version, or pick the first free port."""
     host = "127.0.0.1"
-    if api_health_ok(f"http://{host}:{preferred}"):
+    if api_health_ok(f"http://{host}:{preferred}", expected_version=expected_version):
         return preferred
     if not port_is_listening(host, preferred):
         return preferred
     for port in range(preferred + 1, preferred + span):
-        if api_health_ok(f"http://{host}:{port}"):
+        if api_health_ok(f"http://{host}:{port}", expected_version=expected_version):
             return port
         if not port_is_listening(host, port):
             return port
-    return preferred
+    return preferred + 1
 
 
 def wait_for_api(base_url: str, *, timeout_seconds: float = 60.0) -> bool:

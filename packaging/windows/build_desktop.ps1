@@ -139,6 +139,18 @@ Write-Host ""
 Write-Host "Desktop bundle created at: $distApp"
 $AppVersion | Set-Content -Encoding ascii "$distApp\VERSION.txt"
 Write-Host "Wrote VERSION.txt ($AppVersion)"
+$indexHtml = "$Root\scheduler-ui\dist\index.html"
+if (Test-Path $indexHtml) {
+    $html = Get-Content $indexHtml -Raw
+    $html = $html -replace '<title>Schedule Builder</title>', "<title>Schedule Builder $AppVersion</title>"
+    if ($html -notmatch 'schedule-builder-version') {
+        $html = $html -replace '</head>', "    <meta name=`"schedule-builder-version`" content=`"$AppVersion`" />`n  </head>"
+    } else {
+        $html = $html -replace 'content="[^"]*"(\s*/>\s*<!-- schedule-builder-version -->|"\s*/>)', "content=`"$AppVersion`"`" />"
+    }
+    Set-Content -Encoding utf8 $indexHtml $html
+    Write-Host "Stamped scheduler-ui/dist/index.html with version $AppVersion"
+}
 if ($Demo) {
     Write-Host "Demo install includes station TEST week at saved_schedules/test/2026-05-19_21-33-48"
 }

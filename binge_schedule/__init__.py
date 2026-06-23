@@ -1,3 +1,3 @@
 """Build BINGE schedule workbooks from the content workbook and weekly grids."""
 
-__version__ = "1.0.56"
+__version__ = "1.0.57"
