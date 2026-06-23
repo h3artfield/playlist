@@ -14,6 +14,8 @@ import { fetchCatalog, fetchJson, formatFetchError } from './api'
 import { draftStorageKey, normalizeWeekCount } from './scheduleImport'
 import './SchedulerApp.css'
 
+const bundleVersion = __SCHEDULE_BUILDER_VERSION__
+
 type Episode = {
   id: string
   show: string
@@ -1162,8 +1164,8 @@ export default function SchedulerApp({
 
   useEffect(() => {
     fetchJson<{ app_version?: string }>('/api/health')
-      .then((payload) => setAppVersion(String(payload.app_version || '').trim()))
-      .catch(() => setAppVersion(''))
+      .then((payload) => setAppVersion(String(payload.app_version || bundleVersion).trim()))
+      .catch(() => setAppVersion(bundleVersion))
   }, [])
 
   useEffect(() => {
@@ -1583,7 +1585,7 @@ export default function SchedulerApp({
             {stationId ? (
               <p className="station-context">
                 Station ID: {stationId}
-                {appVersion ? ` · v${appVersion}` : ''}
+                {bundleVersion ? ` · v${bundleVersion}` : ''}
               </p>
             ) : appVersion ? (
               <p className="station-context">Schedule Builder v{appVersion}</p>
@@ -1761,7 +1763,7 @@ export default function SchedulerApp({
           {stationId ? (
             <p className="station-context">
               Station ID: {stationId}
-              {appVersion ? ` · v${appVersion}` : ''}
+              {bundleVersion ? ` · v${bundleVersion}` : ''}
             </p>
           ) : appVersion ? (
             <p className="station-context">Schedule Builder v{appVersion}</p>
@@ -1793,6 +1795,13 @@ export default function SchedulerApp({
       </header>
 
       {generateNotice ? <div className={`generate-notice ${generateNoticeKind}`}>{generateNotice}</div> : null}
+
+      {appVersion && appVersion !== bundleVersion ? (
+        <div className="generate-notice warning">
+          UI build {bundleVersion} is running against server {appVersion}. Close every Schedule Builder window, end any
+          ScheduleBuilder.exe in Task Manager, then reopen the app.
+        </div>
+      ) : null}
 
       {/* New blank schedules only — dates/length come from auto-generate or the saved template. */}
       {showNewScheduleSetup ? (

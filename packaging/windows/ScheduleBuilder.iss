@@ -32,7 +32,7 @@ DisableProgramGroupPage=yes
 ; Upgrade over an existing install: keep the same folder and user data.
 UsePreviousAppDir=yes
 DisableDirPage=auto
-CloseApplications=yes
+CloseApplications=force
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

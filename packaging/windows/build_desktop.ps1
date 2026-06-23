@@ -58,7 +58,15 @@ if (Test-Path "$Root\scheduler-ui\package.json") {
     if (-not (Test-Path "dist\index.html")) {
         throw "React UI build did not produce dist/index.html."
     }
-    Write-Host "React UI built: dist/index.html"
+    $uiJs = Get-ChildItem "dist/assets/*.js" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $uiJs) { throw "React UI build did not produce dist/assets/*.js." }
+    if (-not (Select-String -Path $uiJs.FullName -Pattern "Title start time" -Quiet)) {
+        throw "React UI bundle is missing the movie Title start time control."
+    }
+    if (Select-String -Path $uiJs.FullName -Pattern "Some movies fit by runtime but need a title-start timing note" -Quiet) {
+        throw "React UI bundle still contains the removed movie timing-note sidebar text."
+    }
+    Write-Host "React UI built: dist/index.html (verified movie title-start UI)"
     Pop-Location
 } else {
     throw "scheduler-ui/package.json not found; cannot build desktop app."
