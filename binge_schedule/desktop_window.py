@@ -172,4 +172,4 @@ def open_native_window(
             os._exit(0)
 
     window.events.closed += on_closed
-    webview.start(private_mode=False, debug=False)
+    webview.start(private_mode=True, debug=False)

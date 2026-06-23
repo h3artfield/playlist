@@ -394,6 +394,11 @@ select:focus {
   background: var(--sb-accent-gradient);
 }
 
+.content-picker {
+  display: grid;
+  gap: 8px;
+}
+
 .content-combo input {
   width: 100%;
   padding-right: 50px;

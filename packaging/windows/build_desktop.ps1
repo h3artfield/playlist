@@ -58,10 +58,16 @@ if (Test-Path "$Root\scheduler-ui\package.json") {
     if (-not (Test-Path "dist\index.html")) {
         throw "React UI build did not produce dist/index.html."
     }
-    $uiJs = Get-ChildItem "dist/assets/*.js" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $uiJs) { throw "React UI build did not produce dist/assets/*.js." }
+    $uiJs = Get-ChildItem "dist/v*/"*.js -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $uiJs) {
+        $uiJs = Get-ChildItem "dist/assets/*.js" -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+    if (-not $uiJs) { throw "React UI build did not produce a versioned JS bundle." }
     if (-not (Select-String -Path $uiJs.FullName -Pattern "Start time" -Quiet)) {
         throw "React UI bundle is missing the movie Start time control."
+    }
+    if (-not (Select-String -Path $uiJs.FullName -Pattern "content-picker-" -Quiet)) {
+        throw "React UI bundle is missing the content-mode picker swap."
     }
     if (Select-String -Path $uiJs.FullName -Pattern "Some movies fit by runtime but need a title-start timing note" -Quiet) {
         throw "React UI bundle still contains the removed movie timing-note sidebar text."
@@ -71,8 +77,8 @@ if (Test-Path "$Root\scheduler-ui\package.json") {
     $indexHtml = "$Root\scheduler-ui\dist\index.html"
     $html = Get-Content $indexHtml -Raw
     $html = $html -replace '<title>Schedule Builder</title>', "<title>Schedule Builder $AppVersion</title>"
-    $html = $html -replace '(src="/assets/[^"]+\.js")', "`$1?v=$AppVersion"
-    $html = $html -replace '(href="/assets/[^"]+\.css")', "`$1?v=$AppVersion"
+    $html = $html -replace 'src="(/[^"?]+\.js)"', "src=`"`$1?v=$AppVersion`""
+    $html = $html -replace 'href="(/[^"?]+\.css)"', "href=`"`$1?v=$AppVersion`""
     Set-Content -Encoding utf8 $indexHtml $html
     Write-Host "Stamped scheduler-ui/dist/index.html with version $AppVersion"
 
@@ -143,7 +149,10 @@ if (-not (Test-Path $bundledReact)) {
     throw "PyInstaller bundle is missing React UI at $bundledReact"
 }
 Write-Host "Verified bundled React UI: $bundledReact"
-$bundledUiJs = Get-ChildItem "$distApp\_internal\scheduler-ui\dist\assets\*.js" -ErrorAction SilentlyContinue | Select-Object -First 1
+$bundledUiJs = Get-ChildItem "$distApp\_internal\scheduler-ui\dist\v*\*.js" -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $bundledUiJs) {
+    $bundledUiJs = Get-ChildItem "$distApp\_internal\scheduler-ui\dist\assets\*.js" -ErrorAction SilentlyContinue | Select-Object -First 1
+}
 if (-not $bundledUiJs) { throw "Bundled React UI is missing dist/assets/*.js." }
 if (-not (Select-String -Path $bundledUiJs.FullName -Pattern "Start time" -Quiet)) {
     throw "Bundled React UI is missing the movie Start time control."
