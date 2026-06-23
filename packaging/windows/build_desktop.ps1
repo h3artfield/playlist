@@ -58,11 +58,8 @@ if (Test-Path "$Root\scheduler-ui\package.json") {
     if (-not (Test-Path "dist\index.html")) {
         throw "React UI build did not produce dist/index.html."
     }
-    $uiJs = Get-ChildItem "dist/v*/"*.js -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $uiJs) {
-        $uiJs = Get-ChildItem "dist/assets/*.js" -ErrorAction SilentlyContinue | Select-Object -First 1
-    }
-    if (-not $uiJs) { throw "React UI build did not produce a versioned JS bundle." }
+    $uiJs = Get-ChildItem "dist" -Filter "*.js" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $uiJs) { throw "React UI build did not produce a JS bundle under dist/." }
     if (-not (Select-String -Path $uiJs.FullName -Pattern "Start time" -Quiet)) {
         throw "React UI bundle is missing the movie Start time control."
     }
@@ -149,11 +146,8 @@ if (-not (Test-Path $bundledReact)) {
     throw "PyInstaller bundle is missing React UI at $bundledReact"
 }
 Write-Host "Verified bundled React UI: $bundledReact"
-$bundledUiJs = Get-ChildItem "$distApp\_internal\scheduler-ui\dist\v*\*.js" -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $bundledUiJs) {
-    $bundledUiJs = Get-ChildItem "$distApp\_internal\scheduler-ui\dist\assets\*.js" -ErrorAction SilentlyContinue | Select-Object -First 1
-}
-if (-not $bundledUiJs) { throw "Bundled React UI is missing dist/assets/*.js." }
+$bundledUiJs = Get-ChildItem "$distApp\_internal\scheduler-ui\dist" -Filter "*.js" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $bundledUiJs) { throw "Bundled React UI is missing a JS bundle under scheduler-ui/dist." }
 if (-not (Select-String -Path $bundledUiJs.FullName -Pattern "Start time" -Quiet)) {
     throw "Bundled React UI is missing the movie Start time control."
 }
