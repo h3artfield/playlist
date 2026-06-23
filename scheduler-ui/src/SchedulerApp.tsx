@@ -966,6 +966,7 @@ export default function SchedulerApp({
   const [contentMode, setContentMode] = useState<'series' | 'movies'>('series')
   const [pendingMovieTitleStartOffset, setPendingMovieTitleStartOffset] = useState(0)
   const [appVersion, setAppVersion] = useState('')
+  const [uiBundleVersion, setUiBundleVersion] = useState('')
   const [startDate, setStartDate] = useState(() => initialDraft?.startDate || '2026-05-18')
   const [firstDayOfWeek, setFirstDayOfWeek] = useState(() => initialDraft?.firstDayOfWeek || 'Monday')
   const [startTimeHour, setStartTimeHour] = useState(() => initialDraft?.startTimeHour ?? 0)
@@ -1101,6 +1102,9 @@ export default function SchedulerApp({
     return block
   }, [blocks, selectedBlockIds])
   const isMoviePanel = contentMode === 'movies' || Boolean(selectedMovieBlock)
+  const showSeriesEpisodePicker =
+    contentMode === 'series' && !selectedMovieBlock && Boolean(matchingShow && selectedRanges.length)
+  const showMovieTitleStartPicker = isMoviePanel
   const movieTitleStartBlockStart = selectedMovieBlock
     ? new Date(selectedMovieBlock.start)
     : selectedRange?.start || null
@@ -1163,9 +1167,15 @@ export default function SchedulerApp({
   }, [blocks, scheduleLengthWeeks])
 
   useEffect(() => {
-    fetchJson<{ app_version?: string }>('/api/health')
-      .then((payload) => setAppVersion(String(payload.app_version || bundleVersion).trim()))
-      .catch(() => setAppVersion(bundleVersion))
+    fetchJson<{ app_version?: string; ui_bundle_version?: string }>('/api/health')
+      .then((payload) => {
+        setAppVersion(String(payload.app_version || bundleVersion).trim())
+        setUiBundleVersion(String(payload.ui_bundle_version || bundleVersion).trim())
+      })
+      .catch(() => {
+        setAppVersion(bundleVersion)
+        setUiBundleVersion(bundleVersion)
+      })
   }, [])
 
   useEffect(() => {
@@ -1391,6 +1401,12 @@ export default function SchedulerApp({
     setSelectedRanges([])
     setLiveSelectionRanges([])
     setContentMenuOpen(false)
+    const block = blocks.find((item) => item.id === arg.event.id)
+    if (block?.contentType === 'Movie / special') {
+      setContentMode('movies')
+      setShowQuery(block.show)
+      setStartingEpisodeId('')
+    }
   }
 
   function syncBlockFromCalendarEvent(event: EventApi) {
@@ -1803,6 +1819,13 @@ export default function SchedulerApp({
         </div>
       ) : null}
 
+      {uiBundleVersion && uiBundleVersion !== bundleVersion ? (
+        <div className="generate-notice warning">
+          This page is an outdated UI bundle (server is serving v{uiBundleVersion}, this page is v{bundleVersion}). Fully
+          quit Schedule Builder and reinstall the latest ScheduleBuilderSetup.exe.
+        </div>
+      ) : null}
+
       {/* New blank schedules only — dates/length come from auto-generate or the saved template. */}
       {showNewScheduleSetup ? (
         <section className="setup-card">
@@ -2043,7 +2066,7 @@ export default function SchedulerApp({
               </span>
             </label>
 
-            {isMoviePanel ? (
+            {showMovieTitleStartPicker ? (
               <label>
                 Title start time
                 <select
@@ -2076,7 +2099,9 @@ export default function SchedulerApp({
                   </span>
                 )}
               </label>
-            ) : matchingShow && selectedRanges.length ? (
+            ) : null}
+
+            {showSeriesEpisodePicker ? (
               <label>
                 Starting episode
                 <select

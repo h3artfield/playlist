@@ -127,6 +127,15 @@ if (-not (Test-Path $bundledReact)) {
     throw "PyInstaller bundle is missing React UI at $bundledReact"
 }
 Write-Host "Verified bundled React UI: $bundledReact"
+$bundledUiJs = Get-ChildItem "$distApp\_internal\scheduler-ui\dist\assets\*.js" -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $bundledUiJs) { throw "Bundled React UI is missing dist/assets/*.js." }
+if (-not (Select-String -Path $bundledUiJs.FullName -Pattern "Title start time" -Quiet)) {
+    throw "Bundled React UI is missing the movie Title start time control."
+}
+if (Select-String -Path $bundledUiJs.FullName -Pattern "Some movies fit by runtime but need a title-start timing note" -Quiet) {
+    throw "Bundled React UI still contains the removed movie timing-note sidebar text."
+}
+Write-Host "Verified bundled React UI assets include movie title-start picker."
 if (Test-Path $iconIco) {
     Copy-Item $iconIco $distApp -Force
     Write-Host "Copied ScheduleBuilder.ico for shortcuts and shell icon refresh."

@@ -419,3 +419,42 @@ def test_desktop_app_version_prefers_version_file(tmp_path, monkeypatch):
         lambda: [tmp_path],
     )
     assert desktop_app_version() == "9.9.9"
+
+
+def test_react_dist_path_prefers_bundled_ui_when_frozen(tmp_path, monkeypatch):
+    from binge_schedule.runtime_paths import react_dist_path
+
+    install = tmp_path / "install"
+    internal = install / "_internal" / "scheduler-ui" / "dist"
+    internal.mkdir(parents=True)
+    (internal / "index.html").write_text(
+        '<meta name="schedule-builder-version" content="9.9.9" />',
+        encoding="utf-8",
+    )
+
+    dev_root = tmp_path / "dev"
+    dev_dist = dev_root / "scheduler-ui" / "dist"
+    dev_dist.mkdir(parents=True)
+    (dev_dist / "index.html").write_text("old ui", encoding="utf-8")
+
+    exe = install / "ScheduleBuilder.exe"
+    exe.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr("binge_schedule.runtime_paths.is_frozen", lambda: True)
+    monkeypatch.setattr("binge_schedule.runtime_paths.executable_dir", lambda: install)
+    monkeypatch.chdir(dev_root)
+    monkeypatch.delenv("SCHEDULE_BUILDER_REACT_DIST", raising=False)
+
+    assert react_dist_path() == internal
+
+
+def test_react_dist_bundle_version_reads_index_meta(tmp_path):
+    from binge_schedule.runtime_paths import react_dist_bundle_version
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(
+        '<html><head><meta name="schedule-builder-version" content="1.2.3" /></head></html>',
+        encoding="utf-8",
+    )
+    assert react_dist_bundle_version(dist) == "1.2.3"

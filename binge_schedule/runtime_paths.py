@@ -42,30 +42,91 @@ def resource_search_roots() -> list[Path]:
             seen.add(key)
             roots.append(path)
 
-    add(Path.cwd())
-    add(executable_dir())
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        add(Path(meipass))
-    internal = executable_dir() / "_internal"
-    if internal.is_dir():
-        add(internal)
+    if is_frozen():
+        # Installed desktop builds must prefer bundled files over a dev checkout on cwd.
+        add(executable_dir())
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            add(Path(meipass))
+        internal = executable_dir() / "_internal"
+        if internal.is_dir():
+            add(internal)
+        add(Path.cwd())
+    else:
+        add(Path.cwd())
+        add(executable_dir())
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            add(Path(meipass))
+        internal = executable_dir() / "_internal"
+        if internal.is_dir():
+            add(internal)
     module_root = Path(__file__).resolve().parents[1]
     add(module_root)
     return roots
 
 
+def _react_dist_index(dist: Path) -> Path | None:
+    index = dist / "index.html"
+    return dist if index.is_file() else None
+
+
+def _react_dist_under_install(dist: Path) -> bool:
+    if not is_frozen():
+        return True
+    install_root = executable_dir().resolve()
+    try:
+        dist.resolve().relative_to(install_root)
+        return True
+    except ValueError:
+        return False
+
+
 def react_dist_path() -> Path | None:
     env_path = os.environ.get("SCHEDULE_BUILDER_REACT_DIST", "").strip()
-    candidates: list[Path] = []
     if env_path:
-        candidates.append(Path(env_path))
+        found = _react_dist_index(Path(env_path))
+        if found is not None and _react_dist_under_install(found):
+            return found
+
+    if is_frozen():
+        install_root = executable_dir()
+        for base in (install_root / "_internal", install_root, Path(getattr(sys, "_MEIPASS", "") or "")):
+            if not str(base):
+                continue
+            found = _react_dist_index(base / "scheduler-ui" / "dist")
+            if found is not None:
+                return found
+        return None
+
     for root in resource_search_roots():
-        candidates.append(root / "scheduler-ui" / "dist")
-    for candidate in candidates:
-        if (candidate / "index.html").is_file():
-            return candidate
+        found = _react_dist_index(root / "scheduler-ui" / "dist")
+        if found is not None:
+            return found
     return None
+
+
+def react_dist_bundle_version(dist: Path | None = None) -> str:
+    """UI version stamped into scheduler-ui/dist/index.html at build time."""
+    target = dist or react_dist_path()
+    if target is None:
+        return ""
+    index_html = target / "index.html"
+    if not index_html.is_file():
+        return ""
+    try:
+        text = index_html.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    marker = 'name="schedule-builder-version" content="'
+    start = text.find(marker)
+    if start < 0:
+        return ""
+    start += len(marker)
+    end = text.find('"', start)
+    if end < 0:
+        return ""
+    return text[start:end].strip()
 
 
 def resolve_bundle_file(relative: str, *, extensions: set[str] | None = None) -> Path | None:

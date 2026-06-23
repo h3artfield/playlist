@@ -179,11 +179,16 @@ def create_app() -> FastAPI:
             content_import_wizard_available,
             desktop_app_version,
             is_desktop_runtime,
+            react_dist_bundle_version,
+            react_dist_path,
         )
 
+        ui_dist = react_dist_path()
         return {
             "status": "ok",
             "app_version": desktop_app_version(),
+            "ui_bundle_version": react_dist_bundle_version(ui_dist),
+            "ui_dist": ui_dist.as_posix() if ui_dist is not None else "",
             "features": {
                 "auto_generate_weeks": True,
                 "auto_generate_date_shift": True,

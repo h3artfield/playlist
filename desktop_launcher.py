@@ -166,6 +166,11 @@ def main() -> int:
     with log_path.open("w", encoding="utf-8") as logf:
         try:
             os.environ.setdefault("SCHEDULE_BUILDER_DESKTOP_RUNTIME", "1")
+            if _is_packaged():
+                from binge_schedule.runtime_paths import executable_dir
+
+                os.chdir(executable_dir())
+                logf.write(f"Working directory set to install dir: {executable_dir()}\n")
             react_dist = _resolve_react_dist()
             logf.write(f"Packaged build: {_is_packaged()}\n")
             logf.write(f"Executable: {sys.executable}\n")
