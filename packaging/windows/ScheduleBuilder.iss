@@ -1,5 +1,5 @@
 #define AppName "Schedule Builder"
-#define AppVersion "1.0.54"
+#include "app_version.inc"
 #define AppPublisher "Schedule Builder"
 #define AppExeName "ScheduleBuilder.exe"
 
@@ -7,6 +7,7 @@
 AppId={{8D919E49-7C7C-4A0D-BF6E-C1E59C9435E8}
 AppName={#AppName}
 AppVersion={#AppVersion}
+AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
 DefaultDirName={localappdata}\ScheduleBuilder
 DefaultGroupName={#AppName}
@@ -28,6 +29,10 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
+; Upgrade over an existing install: keep the same folder and user data.
+UsePreviousAppDir=yes
+DisableDirPage=auto
+CloseApplications=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -35,8 +40,14 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: checkedonce
 
+[Dirs]
+; User schedules and logs survive upgrades and uninstall (data is never removed by setup).
+Name: "{app}\saved_schedules"; Permissions: users-modify; Flags: uninsneveruninstall
+Name: "{app}\logs"; Permissions: users-modify; Flags: uninsneveruninstall
+
 [Files]
-Source: "..\..\dist\ScheduleBuilder\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; Replace shipped app files only. Do not bundle saved_schedules/ or logs/ from the build output.
+Source: "..\..\dist\ScheduleBuilder\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "saved_schedules\*,logs\*"
 Source: "ScheduleBuilder.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "redist\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: VCRedistNeedsInstall
 
@@ -78,5 +89,24 @@ begin
       if (Major > 14) or ((Major = 14) and (Minor >= 30)) then
         Result := False;
     end;
+  end;
+end;
+
+function InitializeSetup(): Boolean;
+var
+  PrevVersion: String;
+  UninstallKey: String;
+begin
+  Result := True;
+  UninstallKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#SetupSetting("AppId")}_is1';
+  if RegQueryStringValue(HKCU, UninstallKey, 'DisplayVersion', PrevVersion) then
+  begin
+    if MsgBox(
+      'Setup will upgrade Schedule Builder ' + PrevVersion + ' to {#AppVersion}.' + #13#10#13#10 +
+      'Your saved schedules, imported content, and reports in:' + #13#10 +
+      ExpandConstant('{localappdata}\ScheduleBuilder') + #13#10#13#10 +
+      'will be kept. Only the application files are replaced.',
+      mbConfirmation, MB_OKCANCEL) = IDCANCEL then
+      Result := False;
   end;
 end;

@@ -166,10 +166,15 @@ def create_app() -> FastAPI:
     @app.get("/api/health")
     def health() -> dict[str, Any]:
         from binge_schedule.app_settings import primary_saved_schedules_root
-        from binge_schedule.runtime_paths import content_import_wizard_available, is_desktop_runtime
+        from binge_schedule.runtime_paths import (
+            content_import_wizard_available,
+            desktop_app_version,
+            is_desktop_runtime,
+        )
 
         return {
             "status": "ok",
+            "app_version": desktop_app_version(),
             "features": {
                 "auto_generate_weeks": True,
                 "auto_generate_date_shift": True,

@@ -161,6 +161,25 @@ def default_config_path() -> Path:
         return Path("config/april_2026.yaml")
 
 
+def desktop_app_version() -> str:
+    """Installer/build version (VERSION.txt beside the exe, or DESKTOP_APP_VERSION)."""
+    override = os.environ.get("DESKTOP_APP_VERSION", "").strip()
+    if override:
+        return override
+    for root in resource_search_roots():
+        version_file = root / "VERSION.txt"
+        if version_file.is_file():
+            text = version_file.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+    try:
+        from binge_schedule import __version__
+
+        return str(__version__).strip()
+    except Exception:
+        return ""
+
+
 def content_import_wizard_available() -> bool:
     try:
         import multipart  # noqa: F401

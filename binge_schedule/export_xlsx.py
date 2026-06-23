@@ -365,6 +365,42 @@ def _report_time_label(value: datetime | None) -> str:
     return f"{value.hour}:{value.minute:02d}"
 
 
+def _title_start_offset_minutes(block: dict[str, Any]) -> int:
+    raw = block.get("titleStartOffsetMinutes")
+    if raw is None:
+        raw = block.get("title_start_offset_minutes")
+    try:
+        offset = int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+    return offset if offset in {5, 10, 15, 20, 25} else 0
+
+
+def _format_starts_at_label(value: datetime) -> str:
+    hour = value.hour % 12 or 12
+    suffix = "AM" if value.hour < 12 else "PM"
+    return f"STARTS AT {hour}:{value.minute:02d} {suffix}"
+
+
+def _movie_episode_name_with_starts_at(episode_name: str, title_start: datetime) -> str:
+    label = _format_starts_at_label(title_start)
+    name = str(episode_name or "").strip()
+    return f"{label}\n{name}" if name else label
+
+
+def _episode_name_cell_value(name: str) -> str | CellRichText:
+    text = str(name or "").strip()
+    if not text.startswith("STARTS AT "):
+        return text
+    if "\n" not in text:
+        return CellRichText(TextBlock(InlineFont(b=True), text))
+    first, rest = text.split("\n", 1)
+    return CellRichText(
+        TextBlock(InlineFont(b=True), first + "\n"),
+        TextBlock(InlineFont(b=False), rest),
+    )
+
+
 def _report_episode_fields(block: dict[str, Any]) -> tuple[str, Any, str]:
     code = str(block.get("episodeCode") or block.get("episode_code") or "").strip()
     title = str(block.get("episodeTitle") or block.get("episode_title") or "").strip()
@@ -401,15 +437,21 @@ def blocks_to_binge_dataframe(blocks: list[dict[str, Any]]) -> pd.DataFrame:
         if start is None:
             continue
         episode, episode_num, episode_name = _report_episode_fields(block)
+        offset = _title_start_offset_minutes(block)
+        report_start = start
+        report_episode_name = episode_name
+        if offset:
+            report_start = start + timedelta(minutes=offset)
+            report_episode_name = _movie_episode_name_with_starts_at(episode_name, report_start)
         rows.append(
             {
                 "DATE": start.date(),
-                "START TIME": _report_time_label(start),
+                "START TIME": _report_time_label(report_start),
                 "FINISH TIME ": _report_time_label(end),
                 "EPISODE": episode,
                 "SHOW": str(block.get("show") or ""),
                 "EPISODE #": episode_num,
-                "EPISODE NAME ": episode_name,
+                "EPISODE NAME ": report_episode_name,
             }
         )
     return pd.DataFrame(rows)
@@ -479,6 +521,19 @@ def _write_binge_sheet(ws, df: pd.DataFrame) -> None:
             cell = ws.cell(row=r, column=c)
             if c == 1:
                 cell.value = _binge_date_display(val)
+            elif c <= len(df.columns) and df.columns[c - 1] == "EPISODE NAME ":
+                episode_value = _episode_name_cell_value(str(val or ""))
+                cell.value = episode_value
+                if isinstance(episode_value, CellRichText):
+                    cell.alignment = body_left
+                    cell.fill = row_fill
+                    if c == 4:
+                        cell.border = _BORDER_BINGE_D
+                    elif c == 5:
+                        cell.border = _BORDER_BINGE_E
+                    else:
+                        cell.border = _BORDER_GRID
+                    continue
             else:
                 cell.value = val
             cell.font = body_font

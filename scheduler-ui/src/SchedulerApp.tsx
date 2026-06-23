@@ -37,6 +37,7 @@ type ScheduledBlock = {
   runtimeMinutes: number
   episodeCode: string
   episodeTitle: string
+  titleStartOffsetMinutes?: number
 }
 
 type TimeRange = {
@@ -347,8 +348,23 @@ function formatRuntimeMinutes(minutes: number): string {
   return seconds ? `${mins}:${String(seconds).padStart(2, '0')}` : `${mins} minutes`
 }
 
+const MOVIE_TITLE_START_OFFSETS = [5, 10, 15, 20, 25] as const
+
 function formatClock(value: Date): string {
   return value.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
+function titleStartOptionsForBlockStart(start: Date): Array<{ value: number; label: string }> {
+  return MOVIE_TITLE_START_OFFSETS.map((offset) => ({
+    value: offset,
+    label: formatClock(addMinutes(start, offset)),
+  }))
+}
+
+function movieTitleStartTime(block: Pick<ScheduledBlock, 'start' | 'titleStartOffsetMinutes'>): Date | null {
+  const offset = block.titleStartOffsetMinutes
+  if (!offset) return null
+  return addMinutes(new Date(block.start), offset)
 }
 
 const BINGE_WEEKDAY_ABBR = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -750,6 +766,17 @@ function buildScheduleNotes(blocks: ScheduledBlock[], episodes: Episode[]): Sche
         })
       }
 
+      if (block.contentType === 'Movie / special' && block.titleStartOffsetMinutes) {
+        const titleStart = movieTitleStartTime(block)
+        if (titleStart) {
+          notes.push({
+            kind: 'info',
+            show,
+            message: `${episodeLabelFromBlock(block) || show} — title starts at ${formatClock(titleStart).toUpperCase()} (grid block starts at ${formatClock(new Date(block.start))}).`,
+          })
+        }
+      }
+
       const partNumber = twoPartNumber(block)
       if (partNumber) {
         const key = twoPartBaseTitle(block) || `${show}-${block.episodeCode}`.toLowerCase()
@@ -935,6 +962,7 @@ export default function SchedulerApp({
   const [showQuery, setShowQuery] = useState('')
   const [startingEpisodeId, setStartingEpisodeId] = useState('')
   const [contentMode, setContentMode] = useState<'series' | 'movies'>('series')
+  const [pendingMovieTitleStartOffset, setPendingMovieTitleStartOffset] = useState(0)
   const [startDate, setStartDate] = useState(() => initialDraft?.startDate || '2026-05-18')
   const [firstDayOfWeek, setFirstDayOfWeek] = useState(() => initialDraft?.firstDayOfWeek || 'Monday')
   const [startTimeHour, setStartTimeHour] = useState(() => initialDraft?.startTimeHour ?? 0)
@@ -1052,6 +1080,21 @@ export default function SchedulerApp({
       chosenStartingEpisode &&
       episodeFitsSelection(chosenStartingEpisode, selectedRangeDurations),
   )
+  const selectedMovieBlock = useMemo(() => {
+    if (selectedBlockIds.length !== 1) return null
+    const block = blocks.find((item) => item.id === selectedBlockIds[0])
+    if (!block || block.contentType !== 'Movie / special') return null
+    return block
+  }, [blocks, selectedBlockIds])
+  const showMovieTitleStartPicker = Boolean(
+    selectedMovieBlock || (canCommitFill && chosenStartingEpisode && isMovieEpisode(chosenStartingEpisode)),
+  )
+  const movieTitleStartBlockStart = selectedMovieBlock
+    ? new Date(selectedMovieBlock.start)
+    : selectedRange?.start || null
+  const movieTitleStartSelectValue = selectedMovieBlock
+    ? String(selectedMovieBlock.titleStartOffsetMinutes || '')
+    : String(pendingMovieTitleStartOffset || '')
   const previewRanges = liveSelectionRanges.length ? liveSelectionRanges : selectedRanges
   const baseCalendarStart = useMemo(() => {
     const base = new Date(`${startDate}T00:00:00`)
@@ -1151,6 +1194,10 @@ export default function SchedulerApp({
   }, [blocks, firstDayOfWeek, scheduleLengthWeeks, startDate, startTimeHour, stationId])
 
   useEffect(() => {
+    setPendingMovieTitleStartOffset(0)
+  }, [selectedRanges])
+
+  useEffect(() => {
     setVisibleWeekIndex(0)
     setSelectedRanges([])
     setLiveSelectionRanges([])
@@ -1217,6 +1264,7 @@ export default function SchedulerApp({
           runtimeMinutes: ep.runtimeMinutes,
           episodeCode: ep.code,
           episodeTitle: ep.title,
+          ...(isMovie && pendingMovieTitleStartOffset ? { titleStartOffsetMinutes: pendingMovieTitleStartOffset } : {}),
         })
         cursor = end
         if (!isRepeatableLiteral) epIndex += 1
@@ -1234,7 +1282,27 @@ export default function SchedulerApp({
     setSelectedBlockIds([])
     setShowQuery('')
     setStartingEpisodeId('')
+    setPendingMovieTitleStartOffset(0)
     setContentMenuOpen(false)
+  }
+
+  function updateMovieTitleStartOffset(offsetMinutes: number) {
+    if (selectedMovieBlock) {
+      setBlocks((prev) =>
+        prev.map((block) => {
+          if (block.id !== selectedMovieBlock.id) return block
+          const next = { ...block }
+          if (!offsetMinutes) {
+            delete next.titleStartOffsetMinutes
+          } else {
+            next.titleStartOffsetMinutes = offsetMinutes
+          }
+          return next
+        }),
+      )
+      return
+    }
+    setPendingMovieTitleStartOffset(offsetMinutes)
   }
 
   function deleteSelected() {
@@ -1537,15 +1605,31 @@ export default function SchedulerApp({
                   {resultBlocks.map((block) => {
                     const start = new Date(block.start)
                     const end = new Date(block.end)
+                    const titleStart = movieTitleStartTime(block)
+                    const reportStart = titleStart || start
                     return (
                       <tr key={block.id}>
                         <td>{formatBingeDate(start)}</td>
-                        <td>{formatBingeTime(start)}</td>
+                        <td>{formatBingeTime(reportStart)}</td>
                         <td>{formatBingeTime(end)}</td>
                         <td>{block.episodeCode}</td>
                         <td>{block.show}</td>
                         <td>{bingeEpisodeNumberFromBlock(block)}</td>
-                        <td>{block.episodeTitle}</td>
+                        <td>
+                          {titleStart ? (
+                            <>
+                              <strong>{`STARTS AT ${formatBingeTime(titleStart)}`}</strong>
+                              {block.episodeTitle ? (
+                                <>
+                                  <br />
+                                  {block.episodeTitle}
+                                </>
+                              ) : null}
+                            </>
+                          ) : (
+                            block.episodeTitle
+                          )}
+                        </td>
                       </tr>
                     )
                   })}
@@ -1634,7 +1718,7 @@ export default function SchedulerApp({
                   </div>
                 ))
               ) : (
-                <p className="muted">No end-of-series or skipped-episode notes found.</p>
+                <p className="muted">No end-of-series, movie timing, or skipped-episode notes found.</p>
               )}
             </div>
           </article>
@@ -1846,6 +1930,9 @@ export default function SchedulerApp({
             ) : selectedBlockIds.length ? (
               <div className="selected-range">
                 <strong>{selectedBlockIds.length} program block{selectedBlockIds.length === 1 ? '' : 's'} selected</strong>
+                {selectedMovieBlock && movieTitleStartTime(selectedMovieBlock) ? (
+                  <span>Title starts at {formatClock(movieTitleStartTime(selectedMovieBlock)!)}</span>
+                ) : null}
                 <span>Press Delete or click Delete Selected to remove.</span>
               </div>
             ) : (
@@ -1949,6 +2036,26 @@ export default function SchedulerApp({
                 <span className="picker-note">Some movies fit by runtime but need a title-start timing note.</span>
               ) : null}
             </label>
+
+            {showMovieTitleStartPicker && movieTitleStartBlockStart ? (
+              <label>
+                Title start time
+                <select
+                  value={movieTitleStartSelectValue}
+                  onChange={(event) => updateMovieTitleStartOffset(Number(event.target.value) || 0)}
+                >
+                  <option value="">On the block start ({formatClock(movieTitleStartBlockStart)})</option>
+                  {titleStartOptionsForBlockStart(movieTitleStartBlockStart).map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="picker-note">
+                  Optional. When set, the Report shows <strong>STARTS AT</strong> in bold and Warnings and Notes lists the title time.
+                </span>
+              </label>
+            ) : null}
 
             <button
               className="primary-action wide"

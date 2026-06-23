@@ -41,11 +41,25 @@ The installer shows `legal/EULA.txt` on the standard Inno Setup license page (`L
 
 ## One-time setup
 
+Version number lives in `packaging/windows/app_version.txt` (currently **1.0.55**). The build script writes `app_version.inc` for Inno Setup and `VERSION.txt` into the desktop bundle.
+
 1. Keep installer asset name as `ScheduleBuilderSetup.exe`
 2. Publish it to GitHub Releases
 3. In Streamlit, the **Download Desktop App (Windows)** button points to:
 
 `https://github.com/h3artfield/playlist/releases/latest/download/ScheduleBuilderSetup.exe`
+
+## Upgrade installs
+
+Installing a newer `ScheduleBuilderSetup.exe` over an existing install:
+
+- Uses the same folder: `%LOCALAPPDATA%\ScheduleBuilder`
+- **Keeps** `saved_schedules/` (saved reports and schedules)
+- **Keeps** `config/imported_content_catalog.json` (imported content)
+- **Keeps** `settings.json` and `logs/`
+- Replaces only application binaries and bundled app files
+
+The installer shows a confirmation that user data will be preserved.
 
 ## Automated build (recommended)
 

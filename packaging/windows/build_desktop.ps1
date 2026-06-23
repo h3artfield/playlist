@@ -7,6 +7,17 @@ $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
 Set-Location $Root
 
+$versionFile = "$Root\packaging\windows\app_version.txt"
+if (-not (Test-Path $versionFile)) {
+    throw "Missing version file: $versionFile"
+}
+$AppVersion = (Get-Content $versionFile -Raw).Trim()
+if (-not $AppVersion) {
+    throw "packaging/windows/app_version.txt is empty."
+}
+Write-Host "Desktop app version: $AppVersion"
+"#define AppVersion `"$AppVersion`"" | Set-Content -Encoding ascii "$Root\packaging\windows\app_version.inc"
+
 if ($Clean) {
     if (Test-Path "$Root\build") { Remove-Item "$Root\build" -Recurse -Force }
     if (Test-Path "$Root\dist") { Remove-Item "$Root\dist" -Recurse -Force }
@@ -126,6 +137,8 @@ if ($Demo) {
 
 Write-Host ""
 Write-Host "Desktop bundle created at: $distApp"
+$AppVersion | Set-Content -Encoding ascii "$distApp\VERSION.txt"
+Write-Host "Wrote VERSION.txt ($AppVersion)"
 if ($Demo) {
     Write-Host "Demo install includes station TEST week at saved_schedules/test/2026-05-19_21-33-48"
 }

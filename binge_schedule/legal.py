@@ -25,14 +25,17 @@ def _secret_or_env(key: str) -> str:
 
 
 def desktop_download_meta() -> dict[str, str]:
+    from binge_schedule.runtime_paths import desktop_app_version
+
     url = _secret_or_env("DESKTOP_APP_DOWNLOAD_URL")
     if not url:
         repo = _secret_or_env("DESKTOP_APP_GITHUB_REPO") or "h3artfield/playlist"
         url = f"https://github.com/{repo}/releases/latest/download/ScheduleBuilderSetup.exe"
+    version = _secret_or_env("DESKTOP_APP_VERSION") or desktop_app_version()
     return {
         "url": url,
         "label": _secret_or_env("DESKTOP_APP_LABEL") or "Download Desktop App (Windows)",
-        "version": _secret_or_env("DESKTOP_APP_VERSION"),
+        "version": version,
         "notes_url": _secret_or_env("DESKTOP_APP_RELEASE_NOTES_URL"),
         "eula_version": EULA_VERSION,
     }

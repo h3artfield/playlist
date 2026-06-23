@@ -368,3 +368,54 @@ def test_rename_and_delete_show_catalog(tmp_path, monkeypatch):
     rows = load_imported_catalog_rows(cfg)
     assert len(rows) == 1
     assert rows[0]["display_name"] == "New Show"
+
+
+def test_movie_title_start_offset_formats_report_row():
+    from binge_schedule.export_xlsx import blocks_to_binge_dataframe
+
+    blocks = [
+        {
+            "start": "2026-05-18T16:00:00",
+            "end": "2026-05-18T18:00:00",
+            "show": "Blue Steel",
+            "episodeCode": "MOVIE",
+            "episodeTitle": "Blue Steel - (1934)",
+            "contentType": "Movie / special",
+            "titleStartOffsetMinutes": 5,
+        }
+    ]
+    df = blocks_to_binge_dataframe(blocks)
+    assert df.iloc[0]["START TIME"] == "16:05"
+    assert str(df.iloc[0]["EPISODE NAME "]).startswith("STARTS AT 4:05 PM")
+    assert "Blue Steel - (1934)" in str(df.iloc[0]["EPISODE NAME "])
+
+
+def test_movie_without_title_start_offset_keeps_block_time():
+    from binge_schedule.export_xlsx import blocks_to_binge_dataframe
+
+    blocks = [
+        {
+            "start": "2026-05-18T16:00:00",
+            "end": "2026-05-18T18:00:00",
+            "show": "Blue Steel",
+            "episodeCode": "MOVIE",
+            "episodeTitle": "Blue Steel - (1934)",
+            "contentType": "Movie / special",
+        }
+    ]
+    df = blocks_to_binge_dataframe(blocks)
+    assert df.iloc[0]["START TIME"] == "16:00"
+    assert str(df.iloc[0]["EPISODE NAME "]) == "Blue Steel - (1934)"
+
+
+def test_desktop_app_version_prefers_version_file(tmp_path, monkeypatch):
+    from binge_schedule.runtime_paths import desktop_app_version
+
+    version_file = tmp_path / "VERSION.txt"
+    version_file.write_text("9.9.9\n", encoding="utf-8")
+    monkeypatch.setenv("DESKTOP_APP_VERSION", "")
+    monkeypatch.setattr(
+        "binge_schedule.runtime_paths.resource_search_roots",
+        lambda: [tmp_path],
+    )
+    assert desktop_app_version() == "9.9.9"
